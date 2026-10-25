@@ -23,7 +23,8 @@ static const char *TAG = "stopwatch";
 
 /* ---- LVGL display and touch glue ---- */
 
-static uint16_t draw_buffer[CYD_LCD_WIDTH * DRAW_BUFFER_ROWS];
+/* Static, so sized for the widest board; LVGL fills only the panel's width. */
+static uint16_t draw_buffer[CYD_LCD_MAX_WIDTH * DRAW_BUFFER_ROWS];
 
 typedef struct {
     const uint16_t *pixels;
