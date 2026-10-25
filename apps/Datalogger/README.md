@@ -2,19 +2,7 @@
 
 A one-channel voltage logger for the ESP32 Cheap Yellow Display (CYD), following the [board documentation](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display). Tap **CH1** to start a session: it samples GPIO35 every 3 seconds, converts each sample to volts, and shows the latest reading with session statistics.
 
-Each application lives on its own branch of this repository:
-
-| Branch | Application |
-|---|---|
-| `bootloader` | Launcher: a boot menu with two image slots |
-| `wifi_checker` | Wi-Fi, Bluetooth LE and LAN scanner |
-| `birdnet_viewer` | BirdNET bird photo viewer |
-| `screen_check` | Screen color test |
-| `touchscreen_cal` | Touchscreen calibration |
-| `stopwatch` | LVGL stopwatch |
-| `gear_roll` | LVGL gear demo |
-| `Datalogger` | This voltage logger |
-| `How_to_Build` | Build environment and installation guide |
+It is one of the apps in this repository. The [root README](../../README.md) lists them all and the launcher that runs them.
 
 ## Wiring
 
@@ -79,7 +67,7 @@ The ADC options on this chip (ESP32, ESP-IDF 6.1), for choosing different settin
 
 ## Build and flash
 
-Install the PlatformIO IDE extension or PlatformIO Core (see the `How_to_Build` branch). The project path must be short: builds fail on Windows when source paths pass 260 characters.
+Install the PlatformIO IDE extension or PlatformIO Core (see [docs/INSTALL.md](../../docs/INSTALL.md)). The project path must be short: builds fail on Windows when source paths pass 260 characters.
 
 ```powershell
 $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
@@ -88,12 +76,11 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
 
 The app binary is `%USERPROFILE%\.platformio\cyd-datalogger-build\esp32dev\firmware.bin`. Use it in one of two ways:
 
-- **As a launcher image** (board runs the `bootloader` branch): every push to this branch runs `.github/workflows/build.yml`, which builds the app and publishes it as `firmware.bin` on the release tagged `Datalogger`. The launcher lists the branch and downloads that file. You can also write it to a slot over USB, as described in the `bootloader` README.
+- **As a launcher image:** every push to `main` runs the repository's `.github/workflows/build.yml`, which builds every app and publishes this one as `firmware.bin` on the release tagged `Datalogger`. The launcher lists that release and downloads the file. You can also write it to a slot over USB, as described in the [launcher README](../../launcher/README.md).
 - **On its own:** `& $pio run --target upload --upload-port COM11`. This replaces everything on the board, including the launcher.
 
 To capture the CSV: `& $pio device monitor --port COM11 --baud 115200`. Ctrl+] exits.
 
 ## Hardware
 
-Display pins: MOSI GPIO13, SCLK GPIO14, CS GPIO15, D/C GPIO2, backlight GPIO21, PWM-dimmed to the brightness saved by the launcher.
-Touch pins: MOSI GPIO32, MISO GPIO39, SCLK GPIO25, CS GPIO33, IRQ GPIO36 (XPT2046).
+Both supported boards, the 2.8" ESP32-2432S028R and the 3.5" ESP32-3248S035R, are wired as listed in the [launcher README](../../launcher/README.md#hardware). `cyd_display` detects which one it is running on at start-up.

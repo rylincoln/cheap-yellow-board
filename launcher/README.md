@@ -2,20 +2,9 @@
 
 PlatformIO/ESP-IDF firmware for the ESP32 Cheap Yellow Display (CYD), following the [board documentation](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display). It turns the board into a two-slot boot menu.
 
-Each application lives on its own branch of this repository:
+This folder holds the launcher, its custom second-stage bootloader and the partition table. The apps it boots are the folders under `apps/`, listed in the [root README](../README.md).
 
-| Branch | Application |
-|---|---|
-| `bootloader` | This launcher, its custom second-stage bootloader and the partition table |
-| `wifi_checker` | Wi-Fi and Bluetooth LE scanner |
-| `birdnet_viewer` | BirdNET bird photo viewer |
-| `screen_check` | Screen color test |
-| `touchscreen_cal` | Touchscreen calibration |
-| `stopwatch` | LVGL stopwatch |
-| `gear_roll` | LVGL gear demo |
-| `Datalogger` | Voltage logger on GPIO35 |
-
-Every application branch builds an app binary that runs in either launcher slot. `components/cyd_display` (display, 5x7 font, patterns and touch) is copied on each branch. It reads the panel's ID at start-up and picks the matching board profile, so the same binary runs on the 2.8" and 3.5" boards listed under [Hardware](#hardware).
+Every app builds a binary that runs in either launcher slot. They all use one copy of `components/cyd_display` (display, 5x7 font, patterns and touch) at the repository root. It reads the panel's ID at start-up and picks the matching board profile, so the same binary runs on the 2.8" and 3.5" boards listed under [Hardware](#hardware).
 
 ## How it boots
 
@@ -26,12 +15,12 @@ On power-on, including the EN button, the custom bootloader (`bootloader_compone
 3. When the countdown ends, the last-used image boots. The very first time, it is the first stored image.
 4. Tapping anywhere except an image or the network activity, the scroll buttons, brightness slider and the bottom row's other pages included, adds another 20 seconds. Tap an image to boot it right away.
    - The brightness slider runs down the right edge: `+` at the top, a bar with one segment per level, `-` below it, then the level in percent. `+` and `-` step the backlight by 20%, between 20% and 100%, and tapping a bar segment jumps to its level. The level is saved in NVS (`cyd_config/brightness`). Every image starts at that level, because the shared display driver reads it.
-   - The bottom row shows what the launcher is doing, taking turns every 2.5 seconds (tap it to skip ahead): the network activity (`join <network>`, why a join failed such as `no AP found` or `bad password?`, `GET branches`, `GET releases`, `7 on GitHub`, or a GitHub error such as `GitHub err 403`), then, once joined, the IP address and the signal strength with the network name, then the free RAM. New network activity shows at once.
-   - Tapping the bottom row while it shows the network activity opens the Wi-Fi network chooser, and the countdown waits until it closes, then starts over from 20 seconds. The chooser scans once any join in progress has finished, then lists the networks in range, strongest first. Each name appears once, with its strongest access point, and the joined network is in yellow. It pages five at a time, `SCAN` scans again, and `BACK` returns to the menu. Tapping a network shows its channel, signal, security and address; `CONNECT` opens an on-screen keyboard with the name and password (filled in if it is the saved network; type the name of a hidden network). `SAVE` stores them in `cyd_config` for the launcher and every image. The launcher then rejoins, with progress on the bottom row, and lists the GitHub branches again.
+   - The bottom row shows what the launcher is doing, taking turns every 2.5 seconds (tap it to skip ahead): the network activity (`join <network>`, why a join failed such as `no AP found` or `bad password?`, `GET releases`, `7 on GitHub`, or a GitHub error such as `GitHub err 403`), then, once joined, the IP address and the signal strength with the network name, then the free RAM. New network activity shows at once.
+   - Tapping the bottom row while it shows the network activity opens the Wi-Fi network chooser, and the countdown waits until it closes, then starts over from 20 seconds. The chooser scans once any join in progress has finished, then lists the networks in range, strongest first. Each name appears once, with its strongest access point, and the joined network is in yellow. It pages five at a time, `SCAN` scans again, and `BACK` returns to the menu. Tapping a network shows its channel, signal, security and address; `CONNECT` opens an on-screen keyboard with the name and password (filled in if it is the saved network; type the name of a hidden network). `SAVE` stores them in `cyd_config` for the launcher and every image. The launcher then rejoins, with progress on the bottom row, and lists the GitHub releases again.
    - Below the networks, `PREFER PHONE?` and `PHONE SETUP` offer the same settings from a phone. Tapping either starts phone setup: the board also becomes an open Wi-Fi access point named `CYD-Setup-` plus the last four hex digits of its address, and the screen says how to reach it. `QR CODE` shows a code that joins a phone to it. Phones open the setup page by themselves when they join, because the board answers every DNS name with its own address and redirects their connectivity checks to the page; otherwise browse to `192.168.4.1`. The page lists the networks from the last scan and has fields for the network, password and BirdNET server. It never shows the saved password: leaving the field blank keeps it when the network stays the same, and otherwise means an open network. Saving stores the settings in `cyd_config`, shows `SAVED BY PHONE` on the board, stops the access point and rejoins as above. `BACK` stops the access point without saving.
-5. Meanwhile the launcher joins Wi-Fi and lists the branches of `rftek/cheap-yellow-board`, skipping `bootloader`, `main` and the `How_to_Build` documentation branch. For each remaining branch, up to 16, it looks for `firmware.bin` on the release tagged with the branch name. This usually takes about 10 seconds. Each branch whose current build isn't stored appears in cyan as `+ branch`: either a new application or a newer build of a stored one. Tapping one downloads it into a slot, with progress, and boots it. A branch with no published build yet is skipped and logged. If Wi-Fi or GitHub doesn't answer, the bottom row says why and nothing else changes; tap it to choose another network.
+5. Meanwhile the launcher joins Wi-Fi and lists the releases of `rylincoln/cheap-yellow-board` (`IMAGE_REPO` in `main/main.c`; override it with a `-DIMAGE_REPO` build flag). Every release with a `firmware.bin` asset, up to 16, is an app named after its tag, which CI sets to the app's folder name. This usually takes a few seconds. Each app whose current build isn't stored appears in cyan as `+ name`: either a new app or a newer build of a stored one. Tapping one downloads it into a slot, with progress, and boots it. A release without `firmware.bin` is skipped and logged. If Wi-Fi or GitHub doesn't answer, the bottom row says why and nothing else changes; tap it to choose another network.
 
-A download replaces the slot holding the same branch if there is one. Otherwise it fills an empty slot, or overwrites the slot that does not boot by default. Each slot remembers its branch and the asset's `updated_at` time in NVS, so a rebuilt branch shows up again as an update.
+A download replaces the slot holding the same app if there is one. Otherwise it fills an empty slot, or overwrites the slot that does not boot by default. Each slot remembers its app's name and the asset's `updated_at` time in NVS, so a rebuilt app shows up again as an update. A slot whose image's CMake project name differs from the name it was downloaded as counts as flashed over USB, so each app's `project()` name must match its folder.
 
 ### Settings for boot images
 
@@ -46,7 +35,7 @@ Flash layout (4 MB, `partitions.csv`):
 
 | Partition | Offset | Size | Contents |
 |---|---|---|---|
-| `nvs` | 0x9000 | 16 KB | Slot branches and versions; settings for boot images; Wi-Fi data |
+| `nvs` | 0x9000 | 16 KB | Slot apps and versions; settings for boot images; Wi-Fi data |
 | `otadata` | 0xd000 | 8 KB | Last-chosen image |
 | `factory` | 0x10000 | 1.25 MB | Launcher (about 1.1 MB) |
 | `ota_0` | 0x150000 | 1.31 MB | Boot image slot A |
@@ -54,11 +43,7 @@ Flash layout (4 MB, `partitions.csv`):
 
 ## Publishing a boot image
 
-Each application branch has `.github/workflows/build.yml`. On every push, GitHub Actions builds the branch and uploads its app binary as `firmware.bin` to the release tagged with the branch name, creating the release the first time. To add an application, create a branch with its own PlatformIO project at the root, copy that workflow, and push. It must stay under 1.31 MB and contain no credentials.
-
-This branch has no workflow: the launcher is flashed over USB together with its bootloader and partition table, as below.
-
-Because the release tags share the branch names, plain names like `wifi_checker` are ambiguous in some Git commands, where the tag wins. Use `refs/heads/wifi_checker` in scripts, or set `git config remote.origin.tagOpt --no-tags` in your clone.
+The repository's single workflow, `.github/workflows/build.yml`, builds this launcher and every app on each push. On `main` it publishes each app as `firmware.bin` on a release tagged with the app's folder name, which is what the launcher lists. The launcher itself is not published: flash it over USB together with its bootloader and partition table, as below.
 
 ## Build and flash
 
@@ -84,7 +69,7 @@ $L = "$env:USERPROFILE\.platformio\cyd-launcher-build\esp32dev"
 & $pio device monitor --port COM11 --baud 115200
 ```
 
-To put an application into a slot over USB, build it on its branch and write its `firmware.bin` to `0x150000` (slot A) or `0x2A0000` (slot B):
+To put an application into a slot over USB, build it in its folder under `apps/` and write its `firmware.bin` to `0x150000` (slot A) or `0x2A0000` (slot B):
 
 ```powershell
 & $py $esptool --chip esp32 -p COM11 -b 230400 write_flash 0x150000 path\to\firmware.bin

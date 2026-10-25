@@ -1,30 +1,37 @@
-# ESP32 CYD BirdNET Display
+# ESP32 Cheap Yellow Display apps
 
-This PlatformIO/ESP-IDF application targets the 320x240 display and resistive touchscreen on the ESP32 Cheap Yellow Display (CYD), following the [board documentation](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display).
+PlatformIO and ESP-IDF firmware, in C, for the ESP32 Cheap Yellow Display (CYD). A launcher turns the board into a two-slot boot menu that downloads apps from this repository's GitHub releases, and the apps are the things it boots.
 
-On startup, the application connects to Wi-Fi and queries the local BirdNET server. It then refreshes every two minutes or immediately after a touchscreen tap. The latest visit from today with a confidence of at least 80% is displayed as a full-screen Wikimedia image. The display intentionally contains no text or overlays. If there is no qualifying detection, the screen clears; a failed refresh preserves the last successfully displayed image.
+Two boards are supported. `components/cyd_display` reads the panel's ID at start-up and picks the matching profile, so every binary runs on both:
 
-Configure the BirdNET server with `BIRDNET_BASE_URL` in the local Wi-Fi credentials header. It defaults to `http://birdnet.local`; replace that value with the server's address on your network. The firmware uses:
+| Board | Panel | Text grid |
+|---|---|---|
+| ESP32-2432S028R, 2.8" | ILI9341, 320x240 | 17x10 |
+| ESP32-3248S035R, 3.5" | ST7796, 480x320 | 20x10 |
 
-- `GET {BIRDNET_BASE_URL}/api/v1/detections/visits`
-- `GET {BIRDNET_BASE_URL}/api/v1/image/{URL-encoded-scientific-name}`
+## What to expect
 
-Wikimedia's 1280-pixel thumbnail is streamed over HTTPS directly into the ESP32 ROM JPEG decoder and downscaled to fill the 320x240 display. Streaming avoids keeping the full image in the ESP32's limited RAM; the lower-resolution 500-pixel variant is intentionally not used because it looked blurry when enlarged.
+Flash the launcher once over USB. On every power-on it shows the apps stored in its two slots and counts down to the last one used. On the first start it asks for your Wi-Fi network instead, either on the touchscreen or from a phone through a temporary `CYD-Setup-XXXX` access point. It then lists the apps published on GitHub; tap one to download it into a slot and boot it. Brightness and Wi-Fi are set from the launcher, and every app uses them. Power the board off and on to get back to the launcher.
 
-## Command-line build and flash
+## Layout
 
-Install the PlatformIO IDE extension or PlatformIO Core. From PowerShell, at the project root:
+| Folder | Contents |
+|---|---|
+| [`launcher/`](launcher/README.md) | The launcher, its custom second-stage bootloader and the partition table |
+| [`apps/wifi_checker/`](apps/wifi_checker/README.md) | Wi-Fi, Bluetooth LE and LAN scanner |
+| [`apps/birdnet_viewer/`](apps/birdnet_viewer/README.md) | BirdNET bird photo viewer |
+| [`apps/screen_check/`](apps/screen_check/README.md) | Screen color test |
+| [`apps/touchscreen_cal/`](apps/touchscreen_cal/README.md) | Touchscreen calibration |
+| [`apps/stopwatch/`](apps/stopwatch/README.md) | LVGL stopwatch |
+| [`apps/gear_roll/`](apps/gear_roll/README.md) | LVGL gear demo |
+| [`apps/Datalogger/`](apps/Datalogger/README.md) | Voltage logger on GPIO35 |
+| [`apps/CatMouse/`](apps/CatMouse/README.md) | Maze game in the manner of PAC-MAN |
+| [`apps/bluetooth_diag/`](apps/bluetooth_diag/README.md) | Bluetooth Classic and LE diagnostics |
+| `components/cyd_display/` | Display, 5x7 font, patterns, touch and board detection, shared by every project |
+| [`docs/`](docs/INSTALL.md) | Installing the tools, building, flashing and publishing |
 
-```powershell
-$pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
-& $pio run
-& $pio run --target upload --upload-port COM11
-& $pio device monitor --port COM11 --baud 115200
-```
+Each project folder is a complete PlatformIO project; build it from that folder. Start with [docs/INSTALL.md](docs/INSTALL.md).
 
-Change `COM11` to the board's assigned serial port. The first build installs the ESP32 platform and ESP-IDF toolchain. The monitor exits with Ctrl+].
+## Publishing
 
-Before building, create `%USERPROFILE%\.cyd_private\wifi_credentials.h` from `main\wifi_credentials.example.h` and set the local Wi-Fi SSID/password and BirdNET server URL. Never commit that private file. Build products and machine-specific ESP-IDF/VS Code settings are ignored.
-
-Display pins: MOSI GPIO13, SCLK GPIO14, CS GPIO15, D/C GPIO2, backlight GPIO21.
-Touch pins: MOSI GPIO32, MISO GPIO39, SCLK GPIO25, CS GPIO33, IRQ GPIO36. Touch coordinates use the CYD documentation's XPT2046 calibration range mapped to the tested 320x240 landscape orientation.
+`.github/workflows/build.yml` builds the launcher and every app on each push and pull request. On `main` it publishes each app as `firmware.bin` on a release tagged with its folder name, which is where the launcher finds it. A new folder under `apps/` is picked up by itself; its CMake `project()` name must match the folder name. Apps must fit a 1.31 MB slot and must never contain credentials, because their binaries are public.
