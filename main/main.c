@@ -54,6 +54,8 @@
 /* The menu fills the columns left of the brightness slider: the title, the
    visible entries, the scroll row, then the info row. */
 #define MENU_COLUMNS (CYD_TEXT_COLUMNS - BRIGHTNESS_COLUMNS)
+/* Sizes static buffers: CYD_TEXT_COLUMNS depends on the board. */
+#define MENU_MAX_COLUMNS (CYD_TEXT_MAX_COLUMNS - BRIGHTNESS_COLUMNS)
 #define MENU_FIRST_ROW 1
 #define MENU_ROWS (CYD_TEXT_ROWS - 3)
 #define SCROLL_ROW (MENU_FIRST_ROW + MENU_ROWS)
@@ -78,7 +80,7 @@
 /* The info row cycles through the network activity, the address, the
    signal and the free RAM; new activity shows at once. */
 #define INFO_PAGE_US (2500LL * 1000)
-#define ACTIVITY_SIZE (MENU_COLUMNS + 1)
+#define ACTIVITY_SIZE (MENU_MAX_COLUMNS + 1)
 
 /* The Wi-Fi network chooser, opened by tapping the network activity, lists
    networks like the menu: the title and a SCAN button, then the networks,
@@ -144,7 +146,7 @@ static entry_t entries[MAX_ENTRIES];
 static int entry_count;
 /* Index of the entry shown on the first menu row. */
 static int scroll_offset;
-static char title_text[MENU_COLUMNS + 1];
+static char title_text[MENU_MAX_COLUMNS + 1];
 
 typedef enum { INFO_ACTIVITY, INFO_ADDRESS, INFO_SIGNAL, INFO_RAM, INFO_PAGE_COUNT } info_page_t;
 
@@ -625,10 +627,12 @@ static void draw_entry(int index, bool highlighted)
     const entry_t *entry = &entries[index];
     if (entry->kind == ENTRY_SLOT) {
         /* "A*name": slot letter, '*' on the image that boots by default. */
-        snprintf(line, sizeof(line), "%c%c%.12s", 'A' + entry->index,
-                 entry->index == default_slot() ? '*' : ' ', slots[entry->index].name);
+        snprintf(line, sizeof(line), "%c%c%.*s", 'A' + entry->index,
+                 entry->index == default_slot() ? '*' : ' ', MENU_COLUMNS - 2,
+                 slots[entry->index].name);
     } else {
-        snprintf(line, sizeof(line), "+ %.12s", remote_images[entry->index].name);
+        snprintf(line, sizeof(line), "+ %.*s", MENU_COLUMNS - 2,
+                 remote_images[entry->index].name);
         color = CYD_COLOR_CYAN;
     }
     int row = MENU_FIRST_ROW + index - scroll_offset;
@@ -1293,8 +1297,9 @@ typedef struct {
     const char *status; /* shown instead of the count, such as while scanning */
 } network_list_t;
 
-static const button_t scan_button = {SCAN_BUTTON_COLUMN, MENU_COLUMNS - SCAN_BUTTON_COLUMN,
-                                     "SCAN", CYD_COLOR_WHITE};
+/* A compound literal: its width depends on the board's column count. */
+#define scan_button \
+    ((const button_t){SCAN_BUTTON_COLUMN, MENU_COLUMNS - SCAN_BUTTON_COLUMN, "SCAN", CYD_COLOR_WHITE})
 static const button_t back_button = {0, BACK_BUTTON_COLUMNS, "BACK", CYD_COLOR_WHITE};
 
 static const char *wifi_auth_name(wifi_auth_mode_t mode)
@@ -1440,8 +1445,8 @@ static void draw_network_title(const network_list_t *list)
 static void draw_network(const network_list_t *list, int index, bool highlighted)
 {
     const wifi_ap_record_t *ap = &list->networks[index];
-    char line[24]; /* room for any rssi, to satisfy -Wformat-truncation */
-    snprintf(line, sizeof(line), "%d %.10s", ap->rssi, network_name(ap));
+    char line[48]; /* room for any rssi and SSID; drawing cuts it to the menu */
+    snprintf(line, sizeof(line), "%d %.32s", ap->rssi, network_name(ap));
     int row = MENU_FIRST_ROW + index - list->offset;
     if (highlighted) {
         draw_menu_row(row, CYD_COLOR_BLACK, CYD_COLOR_WHITE, line);
@@ -1479,7 +1484,7 @@ static void draw_network_list(const network_list_t *list)
 
 /* A full-width screen of text rows; the last row is left for buttons. */
 typedef struct {
-    char text[CYD_TEXT_ROWS][CYD_TEXT_COLUMNS + 1];
+    char text[CYD_TEXT_ROWS][CYD_TEXT_MAX_COLUMNS + 1];
     uint16_t color[CYD_TEXT_ROWS];
     int count;
 } page_t;
@@ -1605,8 +1610,7 @@ static void draw_editor_field(const editor_t *editor, int field)
     int visible = CYD_TEXT_COLUMNS - FIELD_LABEL_COLUMNS - 1;
     const char *text = editor->text[field];
     size_t length = strlen(text);
-    /* 14 = CYD_TEXT_COLUMNS - FIELD_LABEL_COLUMNS - 1 (the cursor). */
-    snprintf(line, sizeof(line), "%c %.14s%s", field == FIELD_SSID ? 'N' : 'P',
+    snprintf(line, sizeof(line), "%c %.*s%s", field == FIELD_SSID ? 'N' : 'P', visible,
              length > (size_t)visible ? text + length - visible : text, active ? "_" : "");
     ESP_ERROR_CHECK(cyd_text_row(field, active ? CYD_COLOR_BLACK : CYD_COLOR_WHITE,
                                  active ? CYD_COLOR_WHITE : CYD_COLOR_BUTTON, line));

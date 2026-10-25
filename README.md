@@ -15,7 +15,7 @@ Each application lives on its own branch of this repository:
 | `gear_roll` | LVGL gear demo |
 | `Datalogger` | Voltage logger on GPIO35 |
 
-Every application branch builds an app binary that runs in either launcher slot. `components/cyd_display` (display, 5x7 font, patterns and touch) is copied on each branch.
+Every application branch builds an app binary that runs in either launcher slot. `components/cyd_display` (display, 5x7 font, patterns and touch) is copied on each branch. It reads the panel's ID at start-up and picks the matching board profile, so the same binary runs on the 2.8" and 3.5" boards listed under [Hardware](#hardware).
 
 ## How it boots
 
@@ -92,5 +92,14 @@ Change `COM11` to the board's serial port. The monitor exits with Ctrl+]. If you
 
 ## Hardware
 
-Display pins: MOSI GPIO13, SCLK GPIO14, CS GPIO15, D/C GPIO2, backlight GPIO21, PWM-dimmed to the brightness saved by the launcher. The panel fills a drawing window column by column, so pixel data is sent column-major.
-Touch pins: MOSI GPIO32, MISO GPIO39, SCLK GPIO25, CS GPIO33, IRQ GPIO36. Touch coordinates use the CYD documentation's XPT2046 calibration range (`TOUCH_RAW_*` in `components/cyd_display/cyd_display.c`) mapped to the 320x240 landscape orientation.
+`cyd_display` reads the panel's ID register (RDID4, 0xD3) over the display bus at start-up and picks the board profile with that ID. An unknown ID falls back to the 2.8" board.
+
+| | ESP32-2432S028R (2.8") | ESP32-3248S035R (3.5") |
+|---|---|---|
+| Panel | ILI9341, 320x240 | ST7796, 480x320 |
+| Text grid | 17x10 cells, font at 3x | 20x10 cells, font at 4x |
+| Display bus | MOSI GPIO13, MISO GPIO12, SCLK GPIO14, CS GPIO15, D/C GPIO2 | Same |
+| Backlight | GPIO21 | GPIO27 |
+| Touch (XPT2046) | Own bus: MOSI GPIO32, MISO GPIO39, SCLK GPIO25, CS GPIO33, IRQ GPIO36 | Shares the display bus; CS GPIO33, IRQ GPIO36 |
+
+The backlight is PWM-dimmed to the brightness saved by the launcher. The panel fills a drawing window column by column, so pixel data is sent column-major. Each profile carries a built-in touch calibration, which a calibration saved in `cyd_config/touch_cal` replaces.
