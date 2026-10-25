@@ -1,0 +1,83 @@
+# Builds the launcher and every app under apps/. On main, each app is
+# published as firmware.bin on a release tagged with its folder name, which
+# is where the launcher looks for boot images. Other branches and pull
+# requests only build.
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # platformio.ini puts build_dir under USERPROFILE, which Linux lacks;
+  # PLATFORMIO_BUILD_DIR overrides it anyway.
+  USERPROFILE: ${{ github.workspace }}
+  PLATFORMIO_BUILD_DIR: ${{ github.workspace }}/build
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.projects.outputs.projects }}
+    steps:
+      - uses: actions/checkout@v4
+      # ["launcher", "CatMouse", ...]: a new folder under apps/ builds by itself.
+      - id: projects
+        run: |
+          list=$({ echo launcher; ls -d apps/*/ | xargs -n1 basename; } | jq -R . | jq -cs .)
+          echo "projects=$list" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: list
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.list.outputs.projects) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('launcher/platformio.ini', 'apps/*/platformio.ini') }}
+
+      - run: pip install platformio
+
+      - name: Build
+        working-directory: ${{ matrix.project == 'launcher' && 'launcher' || format('apps/{0}', matrix.project) }}
+        run: pio run
+
+      - name: Check it fits a launcher slot
+        if: matrix.project != 'launcher'
+        run: |
+          size=$(stat -c %s build/esp32dev/firmware.bin)
+          echo "firmware.bin is $size bytes; a slot holds 1376256"
+          test "$size" -le 1376256
+
+      - name: Publish firmware.bin
+        if: matrix.project != 'launcher' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ matrix.project }}
+        run: |
+          cp build/esp32dev/firmware.bin firmware.bin
+          notes="Boot image for apps/$TAG, built from ${GITHUB_SHA::7}."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes"
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
+          fi
+          gh release upload "$TAG" firmware.bin --clobber
