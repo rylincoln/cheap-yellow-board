@@ -33,7 +33,8 @@ static const char *TAG = "gear_roll";
 
 /* ---- LVGL display and touch glue ---- */
 
-static uint16_t draw_buffer[CYD_LCD_WIDTH * DRAW_BUFFER_ROWS];
+/* Static, so sized for the widest board; LVGL fills only the panel's width. */
+static uint16_t draw_buffer[CYD_LCD_MAX_WIDTH * DRAW_BUFFER_ROWS];
 static unsigned frames_drawn;
 static int64_t flush_time_us; /* time spent sending pixels, for the log */
 
