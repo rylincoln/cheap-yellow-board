@@ -6,6 +6,9 @@
 #include <string.h>
 
 #include "cyd_display.h"
+#include "glance.h"
+#include "ha_client.h"
+#include "readings.h"
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_check.h"
@@ -26,7 +29,12 @@
 
 #define LCD_WIDTH CYD_LCD_WIDTH
 #define LCD_HEIGHT CYD_LCD_HEIGHT
-#define QUERY_INTERVAL_US (120LL * 1000 * 1000)
+/* Home Assistant is asked this often while the status page or the glance
+   screen is up. */
+#define HA_INTERVAL_US (30LL * 1000 * 1000)
+/* The glance screen re-composes its tiles this often, so a reading turns
+   gray on time without a fetch. */
+#define GLANCE_REDRAW_US (1000LL * 1000)
 /* Settings the launcher (bootloader branch) stores in NVS for boot images,
    so no credentials are compiled into this published binary. */
 #define CONFIG_NAMESPACE "cyd_config"
@@ -36,12 +44,16 @@
 #define JPEG_WORKBUF_SIZE 3100
 #define IMAGE_TOP 0
 #define IMAGE_HEIGHT LCD_HEIGHT
-/* Notification bits for the BirdNET task. */
+/* Notification bits for the dashboard task. */
 #define TAP_BIT BIT0
 #define WIFI_JOINED_BIT BIT1
 #define MIN_BIRD_CONFIDENCE 0.80
 /* A tap on the photo shows the bird's details this long, or until the next tap. */
 #define INFO_TIMEOUT_US (30LL * 1000 * 1000)
+/* The photo, and a message saying why there is none, give way to the glance
+   screen after these. */
+#define PHOTO_TIMEOUT_US (30LL * 1000 * 1000)
+#define MESSAGE_TIMEOUT_US (5LL * 1000 * 1000)
 /* The BirdNET server has no taxonomy, so the family comes from GBIF. */
 #define GBIF_MATCH_URL "https://api.gbif.org/v1/species/match?name="
 #define COLOR_BLACK CYD_COLOR_BLACK
@@ -53,7 +65,30 @@ static char wifi_password[65];
 static char birdnet_base_url[128];
 static volatile bool wifi_connected;
 static TaskHandle_t app_task_handle;
-static char displayed_species[96];
+
+/* Home Assistant settings, the request built from them once, its reply,
+   and the readings taken from the replies. */
+static const char *const HA_SENSOR_KEYS[SENSOR_COUNT] = {
+    [SENSOR_UPSTAIRS] = "ha_upstairs",
+    [SENSOR_DOWNSTAIRS] = "ha_downstairs",
+    [SENSOR_OUTSIDE] = "ha_outside",
+    [SENSOR_BATTERY] = "ha_battery",
+};
+static char ha_url[128];
+static char ha_token[256];
+static char ha_entity_ids[SENSOR_COUNT][96];
+static const char *const entity_ids[SENSOR_COUNT] = {
+    [SENSOR_UPSTAIRS] = ha_entity_ids[SENSOR_UPSTAIRS],
+    [SENSOR_DOWNSTAIRS] = ha_entity_ids[SENSOR_DOWNSTAIRS],
+    [SENSOR_OUTSIDE] = ha_entity_ids[SENSOR_OUTSIDE],
+    [SENSOR_BATTERY] = ha_entity_ids[SENSOR_BATTERY],
+};
+static char ha_body[768];
+static char ha_reply[2048];
+static reading_t readings[SENSOR_COUNT];
+/* The Home Assistant setting that is missing, such as "no HA token", or
+   NULL when the request is ready. */
+static const char *ha_setup_problem;
 
 typedef struct {
     uint8_t *data;
@@ -123,10 +158,11 @@ typedef struct {
 
 /* ---- Status screen ----
 
-   Until a photo is up, and whenever none is, the screen shows how the
-   viewer is getting on: why it last started (a crash or watchdog reset
+   Until the first Home Assistant readings arrive, the screen shows how the
+   dashboard is getting on: why it last started (a crash or watchdog reset
    boots straight back into this image, so this is how one shows), the
-   Wi-Fi network and its state, the BirdNET server and the last request. */
+   Wi-Fi network and its state, the Home Assistant address and the last
+   request. */
 
 /* Static buffers, so sized for the widest board; drawing cuts to the panel. */
 #define STATUS_SIZE (CYD_TEXT_MAX_COLUMNS + 1)
@@ -144,7 +180,9 @@ static char start_status[STATUS_SIZE];
 static char crash_status[STATUS_SIZE];
 static portMUX_TYPE status_lock = portMUX_INITIALIZER_UNLOCKED;
 static char wifi_status[STATUS_SIZE] = "starting";
-static char server_status[STATUS_SIZE] = "waiting for Wi-Fi";
+static char ha_status[STATUS_SIZE] = "waiting for Wi-Fi";
+/* The last BirdNET request's result, for the BIRDNET ERROR message. */
+static char server_status[STATUS_SIZE];
 static volatile uint32_t status_changes;
 static uint32_t shown_status_changes;
 /* False when something else has been drawn over the status screen. */
@@ -218,6 +256,15 @@ static void set_wifi_status(const char *format, ...)
     va_end(arguments);
 }
 
+static void set_ha_status(const char *format, ...) __attribute__((format(printf, 1, 2)));
+static void set_ha_status(const char *format, ...)
+{
+    va_list arguments;
+    va_start(arguments, format);
+    set_status(ha_status, format, arguments);
+    va_end(arguments);
+}
+
 static void set_server_status(const char *format, ...) __attribute__((format(printf, 1, 2)));
 static void set_server_status(const char *format, ...)
 {
@@ -230,21 +277,31 @@ static void set_server_status(const char *format, ...)
 static void draw_status(void)
 {
     char wifi[STATUS_SIZE];
-    char server[STATUS_SIZE];
+    char home_assistant[STATUS_SIZE];
     portENTER_CRITICAL(&status_lock);
     memcpy(wifi, wifi_status, sizeof(wifi));
-    memcpy(server, server_status, sizeof(server));
+    memcpy(home_assistant, ha_status, sizeof(home_assistant));
     shown_status_changes = status_changes;
     portEXIT_CRITICAL(&status_lock);
 
     char network[STATUS_SIZE + 16];
     snprintf(network, sizeof(network), "Wi-Fi %.11s", wifi_ssid);
-    const char *host = birdnet_base_url;
+    /* "HA homeassistant.local:8123": the address without its scheme or
+       path, cut to the row. */
+    const char *host = ha_url;
     if (strncmp(host, "http://", 7) == 0) {
         host += 7;
     } else if (strncmp(host, "https://", 8) == 0) {
         host += 8;
     }
+    int host_length = (int)strcspn(host, "/");
+    int host_room = CYD_TEXT_COLUMNS - 3; /* after "HA " */
+    char address[STATUS_SIZE];
+    snprintf(address, sizeof(address), "HA %.*s",
+             host_length < host_room ? host_length : host_room, host);
+    const char *hint = ha_setup_problem != NULL ? "use phone setup"
+                       : wifi_connected         ? ""
+                                                : "EN opens launcher";
     char memory[32];
     snprintf(memory, sizeof(memory), "RAM %uK free", (unsigned)(esp_get_free_heap_size() / 1024));
     bool crashed = crash_record.crashes > 0;
@@ -252,16 +309,16 @@ static void draw_status(void)
         uint16_t color;
         const char *text;
     } rows[CYD_TEXT_ROWS] = {
-        {CYD_COLOR_YELLOW, "BIRDNET VIEWER"},
+        {CYD_COLOR_YELLOW, "HOME DASHBOARD"},
         {crashed ? CYD_COLOR_RED : CYD_COLOR_GRAY, start_status},
         {CYD_COLOR_RED, crash_status},
         {CYD_COLOR_CYAN, network},
         {CYD_COLOR_WHITE, wifi},
-        {CYD_COLOR_CYAN, host},
-        {CYD_COLOR_WHITE, server},
-        {CYD_COLOR_GRAY, wifi_connected ? "" : "EN opens launcher"},
+        {CYD_COLOR_CYAN, address},
+        {CYD_COLOR_WHITE, home_assistant},
+        {CYD_COLOR_GRAY, hint},
         {CYD_COLOR_GRAY, memory},
-        {CYD_COLOR_GRAY, "tap to refresh"},
+        {CYD_COLOR_GRAY, "tap to retry"},
     };
     for (int row = 0; row < CYD_TEXT_ROWS; ++row) {
         ESP_ERROR_CHECK(cyd_text_row(row, rows[row].color, CYD_COLOR_BLACK, rows[row].text));
@@ -269,15 +326,26 @@ static void draw_status(void)
     status_on_screen = true;
 }
 
-static bool displayed_image_ready;
 /* True while the bird info screen is up in place of the photo. */
 static bool info_on_screen;
 
-/* Redraws the status screen when it changed, unless a photo or the bird
-   info is up. */
+/* What the screen shows. The status page gives way to the glance screen at
+   the first readings and never comes back; PHOTO, INFO and MESSAGE go back
+   to the glance screen on a tap or a timeout. */
+typedef enum {
+    SCREEN_STATUS,
+    SCREEN_GLANCE,
+    SCREEN_PHOTO,
+    SCREEN_INFO,
+    SCREEN_MESSAGE,
+} screen_t;
+
+static screen_t screen = SCREEN_STATUS;
+
+/* Redraws the status screen when it changed, while it is the screen. */
 static void update_status_screen(void)
 {
-    if (!displayed_image_ready && !info_on_screen &&
+    if (screen == SCREEN_STATUS &&
         (!status_on_screen || status_changes != shown_status_changes)) {
         draw_status();
     }
@@ -1062,65 +1130,48 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
     return ESP_OK;
 }
 
-static void refresh_birdnet(void)
+typedef enum { BIRD_SHOWN, BIRD_NONE, BIRD_FAILED } bird_result_t;
+
+/* Fetches today's latest qualifying visit and streams its photo full
+   screen. On BIRD_FAILED, server_status says why. */
+static bird_result_t show_latest_bird(void)
 {
     bird_detection_t bird;
     show_progress("getting visits");
     esp_err_t result = fetch_latest_bird(&bird);
     if (result != ESP_OK) {
-        /* A photo already up stays; otherwise the status screen says why. */
         report_failure("visits", result);
         set_stage("idle");
-        return;
+        return BIRD_FAILED;
     }
-
     if (!bird.found) {
-        displayed_species[0] = '\0';
-        displayed_image_ready = false;
-        set_server_status("no bird >= %.0f%%", MIN_BIRD_CONFIDENCE * 100);
         set_stage("idle");
-        return;
+        return BIRD_NONE;
     }
 
-    bool species_changed = strcmp(displayed_species, bird.scientific_name) != 0;
-    bool need_image = species_changed || !displayed_image_ready;
     char image_url[768];
     size_t jpeg_length = 0;
     esp_http_client_handle_t image_client = NULL;
-    esp_err_t image_result = ESP_OK;
-    if (need_image) {
-        show_progress("getting photo");
-        image_result = fetch_bird_image(bird.scientific_name, &jpeg_length,
-                                        image_url, sizeof(image_url), &image_client);
-        if (image_result != ESP_OK) {
-            report_failure("photo", image_result);
-            ESP_LOGW(TAG, "Bird image unavailable");
-        }
+    show_progress("getting photo");
+    result = fetch_bird_image(bird.scientific_name, &jpeg_length, image_url, sizeof(image_url),
+                              &image_client);
+    if (result != ESP_OK) {
+        report_failure("photo", result);
+        set_stage("idle");
+        return BIRD_FAILED;
     }
-
-    if (species_changed) {
-        displayed_image_ready = false;
-    }
-    if (image_result == ESP_OK && need_image) {
-        set_stage("drawing photo");
-        image_result = draw_jpeg(image_client, jpeg_length);
-        esp_http_client_close(image_client);
-        esp_http_client_cleanup(image_client);
-        if (image_result == ESP_OK) {
-            displayed_image_ready = true;
-            set_server_status("showing photo");
-        } else {
-            report_failure("drawing", image_result);
-            ESP_LOGW(TAG, "Could not render bird image: %s", esp_err_to_name(image_result));
-        }
-    }
-    /* Without a photo, the status screen comes back and says why. */
-    if (!displayed_image_ready) {
-        ESP_LOGW(TAG, "No bird image is displayed");
-    }
-    snprintf(displayed_species, sizeof(displayed_species), "%s", bird.scientific_name);
-    displayed_bird = bird;
+    set_stage("drawing photo");
+    result = draw_jpeg(image_client, jpeg_length);
+    esp_http_client_close(image_client);
+    esp_http_client_cleanup(image_client);
     set_stage("idle");
+    if (result != ESP_OK) {
+        report_failure("drawing", result);
+        ESP_LOGW(TAG, "Could not render bird image: %s", esp_err_to_name(result));
+        return BIRD_FAILED;
+    }
+    displayed_bird = bird;
+    return BIRD_SHOWN;
 }
 
 /* ---- Bird info screen ---- */
@@ -1280,7 +1331,7 @@ static void draw_bird_info(const bird_detection_t *bird, const bird_info_t *info
         {CYD_COLOR_WHITE, info->weather[0] != '\0' ? info->weather : "..."},
         {CYD_COLOR_WHITE, info->seen[0] != '\0' ? info->seen : "..."},
         {CYD_COLOR_WHITE, info->since},
-        {CYD_COLOR_GRAY, "tap for photo"},
+        {CYD_COLOR_GRAY, "tap for readings"},
     };
     for (int row = 0; row < CYD_TEXT_ROWS; ++row) {
         ESP_ERROR_CHECK(cyd_text_row(row, rows[row].color, CYD_COLOR_BLACK, rows[row].text));
@@ -1305,16 +1356,118 @@ static void show_bird_info(void)
     set_stage("idle");
 }
 
-/* The photo was streamed, not kept, so going back fetches it again. The
-   info stays up until the photo starts drawing over it. */
-static void leave_bird_info(void)
+/* ---- Home Assistant and the glance screen ---- */
+
+/* When PHOTO, INFO or MESSAGE gives way to the glance screen. */
+static int64_t screen_until_us;
+/* When the glance screen last composed its tiles. */
+static int64_t glance_composed_us;
+
+/* Asks Home Assistant for the readings; returns true when at least one
+   sensor is available. A failure only logs and sets the HA status, and
+   leaves the readings as they were. */
+static bool fetch_readings(void)
 {
-    displayed_image_ready = false;
-    refresh_birdnet();
-    info_on_screen = false;
+    int http_status = 0;
+    set_stage("asking HA");
+    set_ha_status("asking HA");
+    update_status_screen();
+    esp_err_t result = ha_fetch(ha_url, ha_token, ha_body, ha_reply, sizeof(ha_reply),
+                                &http_status);
+    set_stage("idle");
+    if (result != ESP_OK) {
+        if (http_status == 401) {
+            set_ha_status("HA 401 bad token");
+        } else if (http_status != 0 && http_status != 200) {
+            set_ha_status("HA HTTP %d", http_status);
+        } else {
+            const char *name = esp_err_to_name(result);
+            set_ha_status("HA %s", strncmp(name, "ESP_ERR_", 8) == 0 ? name + 8 : name);
+        }
+        update_status_screen();
+        return false;
+    }
+    int found = readings_apply(ha_reply, entity_ids, esp_timer_get_time(), readings);
+    ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, SENSOR_COUNT);
+    if (found == 0) {
+        set_ha_status("no sensors found");
+        update_status_screen();
+        return false;
+    }
+    set_ha_status("HA OK");
+    return true;
 }
 
-/* Turns taps from the shared touchscreen driver into refresh requests. */
+/* Composes the tiles from the readings and draws them: all of them on a
+   cleared screen with full, else only those that changed. */
+static void draw_glance(bool full)
+{
+    static glance_tile_t tiles[SENSOR_COUNT];
+    int64_t now = esp_timer_get_time();
+    glance_compose(LCD_WIDTH, LCD_HEIGHT, readings, now, tiles);
+    glance_draw(tiles, full);
+    glance_composed_us = now;
+}
+
+/* Shows the glance screen, drawn in full. */
+static void enter_glance(void)
+{
+    screen = SCREEN_GLANCE;
+    status_on_screen = false;
+    info_on_screen = false;
+    draw_glance(true);
+}
+
+/* Moves to a screen that gives way to the glance screen after timeout_us. */
+static void enter_timed_screen(screen_t next, int64_t timeout_us)
+{
+    screen = next;
+    screen_until_us = esp_timer_get_time() + timeout_us;
+}
+
+/* Clears the screen to two lines of text on rows 4 and 5. */
+static void draw_lines(uint16_t color, const char *first, const char *second)
+{
+    ESP_ERROR_CHECK(cyd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, COLOR_BLACK));
+    ESP_ERROR_CHECK(cyd_text_row(4, color, COLOR_BLACK, first));
+    ESP_ERROR_CHECK(cyd_text_row(5, color, COLOR_BLACK, second));
+}
+
+/* Says for MESSAGE_TIMEOUT_US why no bird is shown. */
+static void show_message(const char *first, const char *second)
+{
+    draw_lines(CYD_COLOR_YELLOW, first, second);
+    enter_timed_screen(SCREEN_MESSAGE, MESSAGE_TIMEOUT_US);
+}
+
+/* Answers a tap on the glance screen at once, then shows today's bird, or
+   says why there is none. */
+static void show_bird_for_tap(void)
+{
+    draw_lines(CYD_COLOR_WHITE, "finding today's", "bird");
+    if (!wifi_connected) {
+        show_message("NO WI-FI", "");
+        return;
+    }
+    char reason[STATUS_SIZE];
+    switch (show_latest_bird()) {
+    case BIRD_SHOWN:
+        enter_timed_screen(SCREEN_PHOTO, PHOTO_TIMEOUT_US);
+        break;
+    case BIRD_NONE:
+        snprintf(reason, sizeof(reason), "today at %.0f%%+", MIN_BIRD_CONFIDENCE * 100);
+        show_message("NO BIRD YET", reason);
+        break;
+    case BIRD_FAILED:
+        portENTER_CRITICAL(&status_lock);
+        memcpy(reason, server_status, sizeof(reason));
+        portEXIT_CRITICAL(&status_lock);
+        show_message("BIRDNET ERROR", reason);
+        break;
+    }
+}
+
+/* Passes taps from the shared touchscreen driver to the dashboard task. */
 static void touch_task(void *argument)
 {
     QueueHandle_t touch_queue = argument;
@@ -1360,8 +1513,8 @@ static void wifi_event_handler(void *argument, esp_event_base_t event_base,
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *disconnected = event_data;
         char text[16];
-        if (wifi_connected) {
-            set_server_status("waiting for Wi-Fi");
+        if (wifi_connected && ha_setup_problem == NULL) {
+            set_ha_status("waiting for Wi-Fi");
         }
         wifi_connected = false;
         ++attempts;
@@ -1386,8 +1539,38 @@ static void wifi_event_handler(void *argument, esp_event_base_t event_base,
     }
 }
 
-/* Reads Wi-Fi and BirdNET settings from NVS; returns false when there are no
-   Wi-Fi settings yet. */
+/* Drops the trailing slashes from a base URL. */
+static void strip_trailing_slashes(char *url)
+{
+    size_t length = strlen(url);
+    while (length > 0 && url[length - 1] == '/') {
+        url[--length] = '\0';
+    }
+}
+
+/* Names the first Home Assistant setting that is missing, or builds the
+   request body and returns NULL. */
+static const char *prepare_ha_request(void)
+{
+    if (ha_url[0] == '\0') {
+        return "no HA address";
+    }
+    if (ha_token[0] == '\0') {
+        return "no HA token";
+    }
+    for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
+        if (ha_entity_ids[sensor][0] == '\0') {
+            return "no sensor IDs";
+        }
+    }
+    if (readings_template_body(entity_ids, ha_body, sizeof(ha_body)) < 0) {
+        return "sensor IDs too long";
+    }
+    return NULL;
+}
+
+/* Reads the Wi-Fi, BirdNET and Home Assistant settings from NVS; returns
+   false when there are no Wi-Fi settings yet. */
 static bool load_config(void)
 {
     snprintf(birdnet_base_url, sizeof(birdnet_base_url), "%s", DEFAULT_BIRDNET_BASE_URL);
@@ -1407,12 +1590,29 @@ static bool load_config(void)
         birdnet_base_url[0] == '\0') {
         snprintf(birdnet_base_url, sizeof(birdnet_base_url), "%s", DEFAULT_BIRDNET_BASE_URL);
     }
-    nvs_close(nvs);
-    size_t length = strlen(birdnet_base_url);
-    while (length > 0 && birdnet_base_url[length - 1] == '/') {
-        birdnet_base_url[--length] = '\0';
+    size = sizeof(ha_url);
+    if (nvs_get_str(nvs, "ha_url", ha_url, &size) != ESP_OK) {
+        ha_url[0] = '\0';
     }
+    size = sizeof(ha_token);
+    if (nvs_get_str(nvs, "ha_token", ha_token, &size) != ESP_OK) {
+        ha_token[0] = '\0';
+    }
+    for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
+        size = sizeof(ha_entity_ids[sensor]);
+        if (nvs_get_str(nvs, HA_SENSOR_KEYS[sensor], ha_entity_ids[sensor], &size) != ESP_OK) {
+            ha_entity_ids[sensor][0] = '\0';
+        }
+    }
+    nvs_close(nvs);
+    strip_trailing_slashes(birdnet_base_url);
+    strip_trailing_slashes(ha_url);
     ESP_LOGI(TAG, "BirdNET server: %s", birdnet_base_url);
+    ha_setup_problem = prepare_ha_request();
+    if (ha_setup_problem != NULL) {
+        set_ha_status("%s", ha_setup_problem);
+        ESP_LOGW(TAG, "Home Assistant is not set up (%s); use phone setup", ha_setup_problem);
+    }
     return have_wifi;
 }
 
@@ -1445,51 +1645,81 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 }
 
-/* Refreshes every QUERY_INTERVAL_US. A tap on the photo shows the bird's
-   details, and a tap on those (or INFO_TIMEOUT_US) goes back to the photo;
-   a tap with no photo up refreshes at once. */
-static void birdnet_task(void *argument)
+/* The earlier of wake_us and deadline_us, counting only a deadline still
+   ahead of now. */
+static int64_t sooner(int64_t wake_us, int64_t deadline_us, int64_t now)
+{
+    return deadline_us > now && deadline_us < wake_us ? deadline_us : wake_us;
+}
+
+/* Runs the screens. Home Assistant is asked on joining Wi-Fi and every
+   HA_INTERVAL_US while the status page or the glance screen is up. A tap on
+   the glance screen shows today's bird, a tap on the photo its details, and
+   a tap on those, or a timeout, goes back to the glance screen. */
+static void dashboard_task(void *argument)
 {
     (void)argument;
     app_task_handle = xTaskGetCurrentTaskHandle();
-    int64_t next_query_time = 0;
-    int64_t info_until = 0;
-    bool refresh_requested = true;
+    int64_t next_fetch_us = 0;
     while (true) {
         update_status_screen();
-        int64_t now = esp_timer_get_time();
-        if (info_on_screen && now >= info_until) {
-            leave_bird_info();
-            next_query_time = esp_timer_get_time() + QUERY_INTERVAL_US;
-        } else if (!info_on_screen && wifi_connected &&
-                   (refresh_requested || next_query_time == 0 || now >= next_query_time)) {
-            refresh_requested = false;
-            refresh_birdnet();
-            next_query_time = esp_timer_get_time() + QUERY_INTERVAL_US;
+        bool timed = screen == SCREEN_PHOTO || screen == SCREEN_INFO || screen == SCREEN_MESSAGE;
+        if (timed && esp_timer_get_time() >= screen_until_us) {
+            enter_glance();
+        }
+        if ((screen == SCREEN_STATUS || screen == SCREEN_GLANCE) && ha_setup_problem == NULL &&
+            wifi_connected && esp_timer_get_time() >= next_fetch_us) {
+            bool arrived = fetch_readings();
+            next_fetch_us = esp_timer_get_time() + HA_INTERVAL_US;
+            if (arrived && screen == SCREEN_STATUS) {
+                enter_glance();
+                /* A tap made on the status page doesn't ask for a bird. */
+                ulTaskNotifyValueClear(NULL, TAP_BIT);
+            }
+        }
+        if (screen == SCREEN_GLANCE &&
+            esp_timer_get_time() - glance_composed_us >= GLANCE_REDRAW_US) {
+            draw_glance(false);
         }
 
-        now = esp_timer_get_time();
-        int64_t remaining_us = next_query_time > now ? next_query_time - now : 1000000;
-        TickType_t wait_ticks = pdMS_TO_TICKS((uint32_t)(remaining_us / 1000));
-        if (wait_ticks == 0 || wait_ticks > pdMS_TO_TICKS(1000)) {
-            wait_ticks = pdMS_TO_TICKS(1000);
+        /* Wake at the screen's next deadline, and at least once a second. */
+        int64_t now = esp_timer_get_time();
+        int64_t wake_us = now + 1000 * 1000;
+        if (screen == SCREEN_STATUS || screen == SCREEN_GLANCE) {
+            wake_us = sooner(wake_us, next_fetch_us, now);
+        }
+        if (screen == SCREEN_GLANCE) {
+            wake_us = sooner(wake_us, glance_composed_us + GLANCE_REDRAW_US, now);
+        } else if (screen != SCREEN_STATUS) {
+            wake_us = sooner(wake_us, screen_until_us, now);
+        }
+        TickType_t wait_ticks = pdMS_TO_TICKS((uint32_t)((wake_us - now) / 1000));
+        if (wait_ticks == 0) {
+            wait_ticks = 1;
         }
         uint32_t events = 0;
         if (xTaskNotifyWait(0, UINT32_MAX, &events, wait_ticks) != pdTRUE) {
             continue;
         }
-        if (events & WIFI_JOINED_BIT) {
-            refresh_requested = true;
+        if ((events & WIFI_JOINED_BIT) && screen == SCREEN_STATUS) {
+            next_fetch_us = 0;
         }
         if (events & TAP_BIT) {
-            if (info_on_screen) {
-                leave_bird_info();
-                next_query_time = esp_timer_get_time() + QUERY_INTERVAL_US;
-            } else if (displayed_image_ready && wifi_connected) {
+            switch (screen) {
+            case SCREEN_STATUS:
+                next_fetch_us = 0;
+                break;
+            case SCREEN_GLANCE:
+                show_bird_for_tap();
+                break;
+            case SCREEN_PHOTO:
                 show_bird_info();
-                info_until = esp_timer_get_time() + INFO_TIMEOUT_US;
-            } else {
-                refresh_requested = true;
+                enter_timed_screen(SCREEN_INFO, INFO_TIMEOUT_US);
+                break;
+            case SCREEN_INFO:
+            case SCREEN_MESSAGE:
+                enter_glance();
+                break;
             }
             /* Taps made while the screen was busy are dropped. */
             ulTaskNotifyValueClear(NULL, TAP_BIT);
@@ -1514,8 +1744,8 @@ void app_main(void)
     BaseType_t touch_task_result =
         xTaskCreate(touch_task, "touch", 3072, touch_queue, 5, NULL);
     ESP_ERROR_CHECK(touch_task_result == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
-    BaseType_t birdnet_task_result =
-        xTaskCreate(birdnet_task, "birdnet", 8192, NULL, 5, &app_task_handle);
-    ESP_ERROR_CHECK(birdnet_task_result == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    BaseType_t dashboard_task_result =
+        xTaskCreate(dashboard_task, "dashboard", 8192, NULL, 5, &app_task_handle);
+    ESP_ERROR_CHECK(dashboard_task_result == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
     wifi_init();
 }
