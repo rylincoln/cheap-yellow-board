@@ -13,12 +13,13 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+/* The display SPI pins are the same on every supported board. */
 #define LCD_HOST SPI2_HOST
 #define LCD_PIN_MOSI GPIO_NUM_13
+#define LCD_PIN_MISO GPIO_NUM_12
 #define LCD_PIN_SCLK GPIO_NUM_14
 #define LCD_PIN_CS GPIO_NUM_15
 #define LCD_PIN_DC GPIO_NUM_2
-#define LCD_PIN_BACKLIGHT GPIO_NUM_21
 
 /* The backlight is dimmed with PWM. */
 #define BACKLIGHT_SPEED_MODE LEDC_LOW_SPEED_MODE
@@ -28,18 +29,8 @@
 #define BACKLIGHT_MAX_DUTY ((1 << 10) - 1)
 #define BACKLIGHT_FREQUENCY_HZ 5000
 
+/* Used when the touchscreen has a bus of its own. */
 #define TOUCH_HOST SPI3_HOST
-#define TOUCH_PIN_MOSI GPIO_NUM_32
-#define TOUCH_PIN_MISO GPIO_NUM_39
-#define TOUCH_PIN_SCLK GPIO_NUM_25
-#define TOUCH_PIN_CS GPIO_NUM_33
-#define TOUCH_PIN_IRQ GPIO_NUM_36
-
-/* XPT2046 calibration for the landscape orientation used here. */
-#define TOUCH_RAW_X_MIN 578
-#define TOUCH_RAW_X_MAX 3672
-#define TOUCH_RAW_Y_MIN 513
-#define TOUCH_RAW_Y_MAX 3600
 #define TOUCH_DEBOUNCE_MS 250
 /* Readings per axis per tap, and how many of the lowest and highest to drop. */
 #define TOUCH_SAMPLES 9
@@ -48,13 +39,107 @@
 /* A run of full-height display columns of one text line. */
 #define TEXT_CHUNK_COLUMNS 40
 
+typedef enum { PANEL_ILI9341, PANEL_ST7796 } panel_driver_t;
+
+typedef struct {
+    uint8_t command;
+    uint8_t data[15];
+    uint8_t size;
+    uint16_t delay_ms;
+} lcd_step_t;
+
+/* Everything that differs between CYD boards. On every board the panel
+   fills a drawing window column by column (top to bottom, then left to
+   right): the column address (0x2A) spans y and the page address (0x2B)
+   spans x, and the madctl value is chosen to make that so. */
+typedef struct {
+    const char *name;
+    uint16_t panel_id; /* model bytes of RDID4 (0xD3) */
+    panel_driver_t driver;
+    int width;
+    int height;
+    int font_scale; /* chosen so height / (8 * font_scale) == CYD_TEXT_ROWS */
+    uint8_t madctl;
+    gpio_num_t backlight;
+    /* XPT2046 wiring. A touch_sclk of GPIO_NUM_NC means the touchscreen
+       shares the display's SPI bus. */
+    gpio_num_t touch_mosi;
+    gpio_num_t touch_miso;
+    gpio_num_t touch_sclk;
+    gpio_num_t touch_cs;
+    gpio_num_t touch_irq;
+    cyd_touch_calibration_t calibration;
+} board_t;
+
+static const board_t boards[] = {
+    {
+        /* Also the fallback for a panel that does not answer RDID4. */
+        .name = "ESP32-2432S028R 2.8\" ILI9341 320x240",
+        .panel_id = 0x9341,
+        .driver = PANEL_ILI9341,
+        .width = 320,
+        .height = 240,
+        .font_scale = 3,
+        .madctl = 0x20, /* sent inside ili9341_init */
+        .backlight = GPIO_NUM_21,
+        .touch_mosi = GPIO_NUM_32,
+        .touch_miso = GPIO_NUM_39,
+        .touch_sclk = GPIO_NUM_25,
+        .touch_cs = GPIO_NUM_33,
+        .touch_irq = GPIO_NUM_36,
+        /* The CYD documentation's raw range, 578-3672 by 513-3600. */
+        .calibration = {.xa = 319.0f / 3094, .xb = 0, .xc = -578 * 319.0f / 3094,
+                        .ya = 0, .yb = 239.0f / 3087, .yc = -513 * 239.0f / 3087},
+    },
+    {
+        .name = "ESP32-3248S035R 3.5\" ST7796 480x320",
+        .panel_id = 0x7796,
+        .driver = PANEL_ST7796,
+        .width = 480,
+        .height = 320,
+        .font_scale = 4,
+        .madctl = 0x08, /* BGR; no MV, so columns run down the landscape screen */
+        .backlight = GPIO_NUM_27,
+        .touch_mosi = GPIO_NUM_NC,
+        .touch_miso = GPIO_NUM_NC,
+        .touch_sclk = GPIO_NUM_NC,
+        .touch_cs = GPIO_NUM_33,
+        .touch_irq = GPIO_NUM_36,
+        /* Measured on a board: raw X runs 3953 at the left to 224 at the
+           right, raw Y 3791 at the top to 165 at the bottom. */
+        .calibration = {.xa = -479.0f / 3729, .xb = 0, .xc = 479 + 224 * 479.0f / 3729,
+                        .ya = 0, .yb = -319.0f / 3626, .yc = 319 + 165 * 319.0f / 3626},
+    },
+};
+
 static const char *TAG = "cyd_display";
+static const board_t *board = &boards[0];
 static spi_device_handle_t lcd_spi;
 static spi_device_handle_t touch_spi;
 static QueueHandle_t touch_queue;
 static int brightness = CYD_BRIGHTNESS_MAX;
 static cyd_touch_calibration_t touch_calibration;
-static uint8_t text_chunk[TEXT_CHUNK_COLUMNS * CYD_FONT_HEIGHT * 2];
+static uint8_t text_chunk[TEXT_CHUNK_COLUMNS * 8 * CYD_FONT_MAX_SCALE * 2];
+
+int cyd_lcd_width(void)
+{
+    return board->width;
+}
+
+int cyd_lcd_height(void)
+{
+    return board->height;
+}
+
+int cyd_font_scale(void)
+{
+    return board->font_scale;
+}
+
+const char *cyd_board_name(void)
+{
+    return board->name;
+}
 
 /* Classic 5x7 ASCII font, 0x20-0x7E, then the up, down and backspace
    arrows; one byte per column, LSB at the top. */
@@ -269,62 +354,168 @@ esp_err_t cyd_draw_cells(int row, const char *text,
                 text_chunk[index + 1] = (uint8_t)color;
             }
         }
-        ESP_RETURN_ON_ERROR(lcd_data(text_chunk, sizeof(text_chunk)), TAG, "send text chunk");
+        ESP_RETURN_ON_ERROR(lcd_data(text_chunk, (size_t)TEXT_CHUNK_COLUMNS * CYD_FONT_HEIGHT * 2),
+                            TAG, "send text chunk");
     }
     return ESP_OK;
 }
 
 esp_err_t cyd_text_row(int row, uint16_t foreground, uint16_t background, const char *text)
 {
-    uint16_t foregrounds[CYD_TEXT_COLUMNS];
-    uint16_t backgrounds[CYD_TEXT_COLUMNS];
-    for (int i = 0; i < CYD_TEXT_COLUMNS; ++i) {
+    uint16_t foregrounds[CYD_TEXT_MAX_COLUMNS];
+    uint16_t backgrounds[CYD_TEXT_MAX_COLUMNS];
+    for (int i = 0; i < CYD_TEXT_MAX_COLUMNS; ++i) {
         foregrounds[i] = foreground;
         backgrounds[i] = background;
     }
     return cyd_draw_cells(row, text, foregrounds, backgrounds);
 }
 
+static const lcd_step_t ili9341_init[] = {
+    {0xCF, {0x00, 0x83, 0x30}, 3, 0},
+    {0xED, {0x64, 0x03, 0x12, 0x81}, 4, 0},
+    {0xE8, {0x85, 0x01, 0x79}, 3, 0},
+    {0xCB, {0x39, 0x2C, 0x00, 0x34, 0x02}, 5, 0},
+    {0xF7, {0x20}, 1, 0},
+    {0xEA, {0x00, 0x00}, 2, 0},
+    {0xC0, {0x26}, 1, 0},
+    {0xC1, {0x11}, 1, 0},
+    {0xC5, {0x35, 0x3E}, 2, 0},
+    {0xC7, {0xBE}, 1, 0},
+    {0x36, {0x20}, 1, 0}, /* MV only; with BGR set, red and blue were swapped */
+    {0x3A, {0x55}, 1, 0},
+    {0xB1, {0x00, 0x1B}, 2, 0},
+    {0xF2, {0x08}, 1, 0},
+    {0x26, {0x01}, 1, 0},
+    {0xE0, {0x1F, 0x1A, 0x18, 0x0A, 0x0F, 0x06, 0x45, 0x87,
+            0x32, 0x0A, 0x07, 0x02, 0x07, 0x05, 0x00}, 15, 0},
+    {0xE1, {0x00, 0x25, 0x27, 0x05, 0x10, 0x09, 0x3A, 0x78,
+            0x4D, 0x05, 0x18, 0x0D, 0x38, 0x3A, 0x1F}, 15, 0},
+};
+
+static const lcd_step_t st7796_init[] = {
+    {0xF0, {0xC3}, 1, 0}, /* unlock the extension commands */
+    {0xF0, {0x96}, 1, 0},
+    {0x3A, {0x55}, 1, 0},
+    {0xB4, {0x01}, 1, 0}, /* 1-dot inversion */
+    {0xB6, {0x80, 0x02, 0x3B}, 3, 0},
+    {0xE8, {0x40, 0x8A, 0x00, 0x00, 0x29, 0x19, 0xA5, 0x33}, 8, 0},
+    {0xC1, {0x06}, 1, 0},
+    {0xC2, {0xA7}, 1, 0},
+    {0xC5, {0x18}, 1, 120},
+    {0xE0, {0xF0, 0x09, 0x0B, 0x06, 0x04, 0x15, 0x2F, 0x54,
+            0x42, 0x3C, 0x0E, 0x0A, 0x0F, 0x0B}, 14, 0},
+    {0xE1, {0xE0, 0x09, 0x0B, 0x06, 0x04, 0x03, 0x2B, 0x43,
+            0x42, 0x3C, 0x0E, 0x0A, 0x0F, 0x0B}, 14, 120},
+    {0xF0, {0x3C}, 1, 0}, /* lock them again */
+    {0xF0, {0x69}, 1, 120},
+};
+
+static esp_err_t lcd_run(const lcd_step_t *steps, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) {
+        ESP_RETURN_ON_ERROR(lcd_command(steps[i].command), TAG, "send init command");
+        ESP_RETURN_ON_ERROR(lcd_data(steps[i].data, steps[i].size), TAG, "send init data");
+        if (steps[i].delay_ms > 0) {
+            esp_rom_delay_us((uint32_t)steps[i].delay_ms * 1000);
+        }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t lcd_init(void)
 {
-    static const struct {
-        uint8_t command;
-        uint8_t data[15];
-        uint8_t size;
-    } initialization[] = {
-        {0xCF, {0x00, 0x83, 0x30}, 3},
-        {0xED, {0x64, 0x03, 0x12, 0x81}, 4},
-        {0xE8, {0x85, 0x01, 0x79}, 3},
-        {0xCB, {0x39, 0x2C, 0x00, 0x34, 0x02}, 5},
-        {0xF7, {0x20}, 1},
-        {0xEA, {0x00, 0x00}, 2},
-        {0xC0, {0x26}, 1},
-        {0xC1, {0x11}, 1},
-        {0xC5, {0x35, 0x3E}, 2},
-        {0xC7, {0xBE}, 1},
-        {0x36, {0x20}, 1}, /* MV only; with BGR set, red and blue were swapped */
-        {0x3A, {0x55}, 1},
-        {0xB1, {0x00, 0x1B}, 2},
-        {0xF2, {0x08}, 1},
-        {0x26, {0x01}, 1},
-        {0xE0, {0x1F, 0x1A, 0x18, 0x0A, 0x0F, 0x06, 0x45, 0x87,
-                0x32, 0x0A, 0x07, 0x02, 0x07, 0x05, 0x00}, 15},
-        {0xE1, {0x00, 0x25, 0x27, 0x05, 0x10, 0x09, 0x3A, 0x78,
-                0x4D, 0x05, 0x18, 0x0D, 0x38, 0x3A, 0x1F}, 15},
-    };
-
     ESP_RETURN_ON_ERROR(lcd_command(0x01), TAG, "software reset");
     esp_rom_delay_us(150000);
-    for (size_t i = 0; i < sizeof(initialization) / sizeof(initialization[0]); ++i) {
-        ESP_RETURN_ON_ERROR(lcd_command(initialization[i].command), TAG, "send init command");
-        ESP_RETURN_ON_ERROR(lcd_data(initialization[i].data, initialization[i].size),
-                            TAG, "send init data");
+    if (board->driver == PANEL_ST7796) {
+        /* The ST7796 takes its settings only once awake. */
+        ESP_RETURN_ON_ERROR(lcd_command(0x11), TAG, "exit sleep mode");
+        esp_rom_delay_us(120000);
+        ESP_RETURN_ON_ERROR(lcd_run(st7796_init, sizeof(st7796_init) / sizeof(st7796_init[0])),
+                            TAG, "initialize ST7796");
+        ESP_RETURN_ON_ERROR(lcd_command(0x36), TAG, "set memory access control");
+        ESP_RETURN_ON_ERROR(lcd_data(&board->madctl, 1), TAG, "set orientation");
+        ESP_RETURN_ON_ERROR(lcd_command(0x20), TAG, "inversion off");
+    } else {
+        /* Byte for byte the sequence this driver has always sent. */
+        ESP_RETURN_ON_ERROR(lcd_run(ili9341_init, sizeof(ili9341_init) / sizeof(ili9341_init[0])),
+                            TAG, "initialize ILI9341");
+        ESP_RETURN_ON_ERROR(lcd_command(0x11), TAG, "exit sleep mode");
+        esp_rom_delay_us(120000);
     }
-    ESP_RETURN_ON_ERROR(lcd_command(0x11), TAG, "exit sleep mode");
-    esp_rom_delay_us(120000);
     ESP_RETURN_ON_ERROR(lcd_command(0x29), TAG, "turn display on");
     esp_rom_delay_us(20000);
     return ESP_OK;
+}
+
+/* Reads RDID4 (0xD3) through a slow temporary device. The panel answers
+   with a dummy clock and then three bytes: manufacturer, model high, model
+   low. The ST7796 sends one dummy bit and the ILI9341 a dummy byte, so both
+   alignments are decoded and the one naming a known board wins. Returns 0
+   when the panel does not answer with one. */
+static uint16_t lcd_read_panel_id(void)
+{
+    spi_device_interface_config_t slow_device = {
+        .clock_speed_hz = 2 * 1000 * 1000,
+        .mode = 0,
+        .spics_io_num = LCD_PIN_CS,
+        .queue_size = 1,
+    };
+    spi_device_handle_t device;
+    if (spi_bus_add_device(LCD_HOST, &slow_device, &device) != ESP_OK) {
+        return 0;
+    }
+    uint8_t command = 0xD3;
+    uint8_t rx[4] = {0};
+    esp_err_t result = spi_device_acquire_bus(device, portMAX_DELAY);
+    if (result == ESP_OK) {
+        gpio_set_level(LCD_PIN_DC, 0);
+        spi_transaction_t send = {
+            .length = 8,
+            .tx_buffer = &command,
+            .flags = SPI_TRANS_CS_KEEP_ACTIVE,
+        };
+        result = spi_device_polling_transmit(device, &send);
+        if (result == ESP_OK) {
+            gpio_set_level(LCD_PIN_DC, 1);
+            spi_transaction_t receive = {
+                .length = sizeof(rx) * 8,
+                .rxlength = sizeof(rx) * 8,
+                .rx_buffer = rx,
+            };
+            result = spi_device_polling_transmit(device, &receive);
+        }
+        spi_device_release_bus(device);
+    }
+    spi_bus_remove_device(device);
+
+    uint32_t stream = ((uint32_t)rx[0] << 24) | ((uint32_t)rx[1] << 16) |
+                      ((uint32_t)rx[2] << 8) | rx[3];
+    uint16_t byte_aligned = (uint16_t)stream;
+    uint16_t bit_shifted = (uint16_t)((stream << 1) >> 8);
+    ESP_LOGI(TAG, "Panel ID bytes %02X %02X %02X %02X", rx[0], rx[1], rx[2], rx[3]);
+    if (result != ESP_OK) {
+        return 0;
+    }
+    for (size_t i = 0; i < sizeof(boards) / sizeof(boards[0]); ++i) {
+        if (boards[i].panel_id == bit_shifted) {
+            return bit_shifted;
+        }
+    }
+    return byte_aligned;
+}
+
+static void select_board(uint16_t panel_id)
+{
+    for (size_t i = 0; i < sizeof(boards) / sizeof(boards[0]); ++i) {
+        if (boards[i].panel_id == panel_id) {
+            board = &boards[i];
+            ESP_LOGI(TAG, "Board: %s", board->name);
+            return;
+        }
+    }
+    board = &boards[0];
+    ESP_LOGW(TAG, "Panel ID 0x%04X is not a known board; assuming %s", panel_id, board->name);
 }
 
 esp_err_t cyd_set_brightness(int percent)
@@ -372,7 +563,7 @@ static esp_err_t backlight_init(void)
     };
     ESP_RETURN_ON_ERROR(ledc_timer_config(&timer), TAG, "configure backlight timer");
     ledc_channel_config_t channel = {
-        .gpio_num = LCD_PIN_BACKLIGHT,
+        .gpio_num = board->backlight,
         .speed_mode = BACKLIGHT_SPEED_MODE,
         .channel = BACKLIGHT_CHANNEL,
         .timer_sel = BACKLIGHT_TIMER,
@@ -388,11 +579,10 @@ esp_err_t cyd_display_init(void)
         .mode = GPIO_MODE_OUTPUT,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&display_gpio), TAG, "configure display GPIO");
-    ESP_RETURN_ON_ERROR(backlight_init(), TAG, "initialize backlight");
 
     spi_bus_config_t display_bus = {
         .mosi_io_num = LCD_PIN_MOSI,
-        .miso_io_num = -1,
+        .miso_io_num = LCD_PIN_MISO,
         .sclk_io_num = LCD_PIN_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
@@ -400,6 +590,9 @@ esp_err_t cyd_display_init(void)
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(LCD_HOST, &display_bus, SPI_DMA_CH_AUTO),
                         TAG, "initialize display SPI bus");
+    /* Which board is this? Everything below depends on the answer. */
+    select_board(lcd_read_panel_id());
+    ESP_RETURN_ON_ERROR(backlight_init(), TAG, "initialize backlight");
 
     spi_device_interface_config_t display_device = {
         /* The display uses the ESP32's native HSPI pins, which run this fast
@@ -420,30 +613,34 @@ esp_err_t cyd_display_init(void)
 static esp_err_t touch_bus_init(void)
 {
     gpio_config_t irq_config = {
-        .pin_bit_mask = 1ULL << TOUCH_PIN_IRQ,
+        .pin_bit_mask = 1ULL << board->touch_irq,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
     };
     ESP_RETURN_ON_ERROR(gpio_config(&irq_config), TAG, "configure touch IRQ");
 
-    spi_bus_config_t bus_config = {
-        .mosi_io_num = TOUCH_PIN_MOSI,
-        .miso_io_num = TOUCH_PIN_MISO,
-        .sclk_io_num = TOUCH_PIN_SCLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 8,
-    };
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(TOUCH_HOST, &bus_config, SPI_DMA_CH_AUTO),
-                        TAG, "initialize touchscreen SPI bus");
+    spi_host_device_t host = LCD_HOST;
+    if (board->touch_sclk != GPIO_NUM_NC) {
+        spi_bus_config_t bus_config = {
+            .mosi_io_num = board->touch_mosi,
+            .miso_io_num = board->touch_miso,
+            .sclk_io_num = board->touch_sclk,
+            .quadwp_io_num = -1,
+            .quadhd_io_num = -1,
+            .max_transfer_sz = 8,
+        };
+        ESP_RETURN_ON_ERROR(spi_bus_initialize(TOUCH_HOST, &bus_config, SPI_DMA_CH_AUTO),
+                            TAG, "initialize touchscreen SPI bus");
+        host = TOUCH_HOST;
+    }
 
     spi_device_interface_config_t device_config = {
         .clock_speed_hz = 2 * 1000 * 1000,
         .mode = 0,
-        .spics_io_num = TOUCH_PIN_CS,
+        .spics_io_num = board->touch_cs,
         .queue_size = 1,
     };
-    ESP_RETURN_ON_ERROR(spi_bus_add_device(TOUCH_HOST, &device_config, &touch_spi),
+    ESP_RETURN_ON_ERROR(spi_bus_add_device(host, &device_config, &touch_spi),
                         TAG, "add touchscreen SPI device");
     return ESP_OK;
 }
@@ -466,12 +663,7 @@ static esp_err_t touch_read_raw(uint8_t command, uint16_t *value)
 
 void cyd_touch_default_calibration(cyd_touch_calibration_t *calibration)
 {
-    float x_scale = (float)(CYD_LCD_WIDTH - 1) / (TOUCH_RAW_X_MAX - TOUCH_RAW_X_MIN);
-    float y_scale = (float)(CYD_LCD_HEIGHT - 1) / (TOUCH_RAW_Y_MAX - TOUCH_RAW_Y_MIN);
-    *calibration = (cyd_touch_calibration_t){
-        .xa = x_scale, .xb = 0, .xc = -TOUCH_RAW_X_MIN * x_scale,
-        .ya = 0, .yb = y_scale, .yc = -TOUCH_RAW_Y_MIN * y_scale,
-    };
+    *calibration = board->calibration;
 }
 
 void cyd_touch_set_calibration(const cyd_touch_calibration_t *calibration)
@@ -594,7 +786,7 @@ static void touchscreen_task(void *argument)
     TickType_t last_tap = 0;
     while (true) {
         /* Each new press becomes one tap, debounced against panel chatter. */
-        bool pressed = gpio_get_level(TOUCH_PIN_IRQ) == 0;
+        bool pressed = gpio_get_level(board->touch_irq) == 0;
         if (pressed && !was_pressed &&
             xTaskGetTickCount() - last_tap >= pdMS_TO_TICKS(TOUCH_DEBOUNCE_MS)) {
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -602,7 +794,7 @@ static void touchscreen_task(void *argument)
             esp_err_t result = touch_read_point(&point);
             if (result != ESP_OK) {
                 ESP_LOGE(TAG, "Touchscreen read failed: %s", esp_err_to_name(result));
-            } else if (gpio_get_level(TOUCH_PIN_IRQ) == 0) {
+            } else if (gpio_get_level(board->touch_irq) == 0) {
                 ESP_LOGI(TAG, "Tap at %d,%d (raw %u,%u)", point.x, point.y, point.raw_x,
                          point.raw_y);
                 xQueueSend(touch_queue, &point, 0);
@@ -623,8 +815,8 @@ esp_err_t cyd_touch_init(void)
 bool cyd_touch_read(cyd_touch_point_t *point)
 {
     /* Check again after reading: a finger lifting mid-read gives garbage. */
-    return gpio_get_level(TOUCH_PIN_IRQ) == 0 && touch_read_point(point) == ESP_OK &&
-           gpio_get_level(TOUCH_PIN_IRQ) == 0;
+    return gpio_get_level(board->touch_irq) == 0 && touch_read_point(point) == ESP_OK &&
+           gpio_get_level(board->touch_irq) == 0;
 }
 
 esp_err_t cyd_touch_start(QueueHandle_t *queue)

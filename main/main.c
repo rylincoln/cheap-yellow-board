@@ -128,7 +128,8 @@ typedef struct {
    boots straight back into this image, so this is how one shows), the
    Wi-Fi network and its state, the BirdNET server and the last request. */
 
-#define STATUS_SIZE (CYD_TEXT_COLUMNS + 1)
+/* Static buffers, so sized for the widest board; drawing cuts to the panel. */
+#define STATUS_SIZE (CYD_TEXT_MAX_COLUMNS + 1)
 #define STATUS_MAGIC 0xB1DD5747u
 
 /* What the viewer was doing, kept across crash and watchdog resets. */
@@ -1014,18 +1015,16 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
         return ESP_ERR_INVALID_RESPONSE;
     }
 
+    /* Decode at the smallest 1/2^n size still at least as wide as the panel,
+       so the tile scaler only ever shrinks: 1280 px decodes at 1/4 for 320 px
+       panels and at 1/2 for 480 px ones, rather than stretching 320 to 480. */
     BYTE scale = 0;
     while (scale < 3 &&
-           ((decoder.width + (1U << scale) - 1) >> scale) > LCD_WIDTH) {
+           (int)((decoder.width + (2U << scale) - 1) >> (scale + 1)) >= LCD_WIDTH) {
         ++scale;
     }
     int scaled_width = (int)((decoder.width + (1U << scale) - 1) >> scale);
     int scaled_height = (int)((decoder.height + (1U << scale) - 1) >> scale);
-    if (scaled_width > LCD_WIDTH) {
-        heap_caps_free(work_buffer);
-        ESP_LOGE(TAG, "JPEG image is too wide to fit the display");
-        return ESP_ERR_INVALID_SIZE;
-    }
     size_t tile_width = ((size_t)16 * LCD_WIDTH + scaled_width - 1) / scaled_width + 1;
     size_t tile_height = ((size_t)16 * LCD_HEIGHT + scaled_height - 1) / scaled_height + 1;
     if (tile_width > 64 || tile_height > 64) {
@@ -1503,10 +1502,10 @@ void app_main(void)
     ESP_ERROR_CHECK(cyd_display_init());
     note_start();
     if (!load_config()) {
-        ESP_LOGE(TAG, "No Wi-Fi settings in NVS; start the launcher once to store them");
+        ESP_LOGE(TAG, "No Wi-Fi settings in NVS; the launcher's Wi-Fi setup stores them");
         ESP_ERROR_CHECK(cyd_text_row(3, CYD_COLOR_YELLOW, CYD_COLOR_BLACK, "NO WI-FI SETTINGS"));
-        ESP_ERROR_CHECK(cyd_text_row(5, CYD_COLOR_WHITE, CYD_COLOR_BLACK, "Press EN to run"));
-        ESP_ERROR_CHECK(cyd_text_row(6, CYD_COLOR_WHITE, CYD_COLOR_BLACK, "the launcher once"));
+        ESP_ERROR_CHECK(cyd_text_row(5, CYD_COLOR_WHITE, CYD_COLOR_BLACK, "Press EN to open"));
+        ESP_ERROR_CHECK(cyd_text_row(6, CYD_COLOR_WHITE, CYD_COLOR_BLACK, "Wi-Fi setup"));
         return;
     }
 
