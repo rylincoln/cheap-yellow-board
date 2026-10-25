@@ -13,7 +13,6 @@ How to set up a PC from scratch to build every application in this repository, f
 | **Python 3** | Indirectly | PlatformIO runs on Python. Its installers set up their own environment. |
 | **Visual Studio Code** + PlatformIO IDE extension | **No**, optional | The easiest way to install PlatformIO, plus an editor and build buttons. Every build and flash in this project also works from a terminal. |
 | ESP-IDF, compilers, CMake, esptool | No separate install | PlatformIO fetches them automatically on the first build. |
-| LVGL | No separate install | Fetched at build time by the ESP-IDF component manager for `apps/stopwatch` and `apps/gear_roll`. The launcher fetches `espressif/qrcode` the same way. |
 | A Wi-Fi network | For downloads | Set on the board, with the launcher's network chooser or from a phone. No binary has credentials compiled in. |
 | A GitHub account with push access | To publish images | GitHub Actions builds the apps and publishes their binaries. |
 | GitHub CLI (`gh`) | No | Not used. CI uses it on GitHub's side only. |
@@ -79,15 +78,7 @@ The layout:
 | Folder | Contents | Published by CI |
 |---|---|---|
 | `launcher/` | Launcher (factory app), custom second-stage bootloader, partition table | No: flash it over USB once |
-| `apps/wifi_checker/` | Wi-Fi, Bluetooth LE and LAN scanner | Yes |
 | `apps/birdnet_viewer/` | BirdNET bird photo viewer | Yes |
-| `apps/screen_check/` | Screen color test | Yes |
-| `apps/touchscreen_cal/` | Touchscreen calibration | Yes |
-| `apps/stopwatch/` | LVGL stopwatch | Yes |
-| `apps/gear_roll/` | LVGL gear demo | Yes |
-| `apps/Datalogger/` | CH1 voltage logger (GPIO35) | Yes |
-| `apps/CatMouse/` | Maze game in the manner of PAC-MAN | Yes |
-| `apps/bluetooth_diag/` | Bluetooth Classic and LE diagnostics | Yes |
 | `components/cyd_display/` | Shared display and touch driver, with board detection | Built into every project |
 | `docs/` | This guide | No |
 
@@ -95,7 +86,7 @@ The layout:
 
 ## 5. Wi-Fi settings live on the board
 
-There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the BirdNET server. The launcher saves the settings in the board's NVS storage, where every app reads them. Apps can also change them on the device, for example with the CONNECT screen in `wifi_checker`.
+There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the BirdNET server. The launcher saves the settings in the board's NVS storage, where every app reads them.
 
 ## 6. Build
 
@@ -119,8 +110,8 @@ On macOS or Linux, set `USERPROFILE` for the build folder in `platformio.ini`: `
 What to expect:
 
 - **First build on a new PC:** PlatformIO downloads the pinned `espressif32@7.1.3` platform, with ESP-IDF 6.1.0, the Xtensa GCC 15.2 toolchain, CMake, Ninja and esptool. That's a large download, and it lands in `%USERPROFILE%\.platformio`.
-- **First build of each project:** about 7 to 17 minutes, because each project has its own build folder (`%USERPROFILE%\.platformio\cyd-*-build`) and compiles all of ESP-IDF. LVGL apps take the longest. Later builds take seconds to a couple of minutes.
-- **Downloaded components** (LVGL for `stopwatch` and `gear_roll`, `espressif/qrcode` for the launcher) land in that project's `managed_components/`, which is git-ignored, at the exact version in its `dependencies.lock`.
+- **First build of each project:** about 7 to 17 minutes, because each project has its own build folder (`%USERPROFILE%\.platformio\cyd-*-build`) and compiles all of ESP-IDF. Later builds take seconds to a couple of minutes.
+- **Downloaded components** (`espressif/qrcode` for the launcher) land in that project's `managed_components/`, which is git-ignored, at the exact version in its `dependencies.lock`.
 - **Output:** `firmware.bin` in that project's build folder. The launcher also produces `bootloader.bin`, `partitions.bin` and `ota_data_initial.bin`.
 - **After editing `sdkconfig.defaults`:** delete the generated `sdkconfig.esp32dev` in that project's folder, so the new defaults apply. Expect a full rebuild.
 
@@ -158,7 +149,7 @@ An app can also run on its own, without the launcher: `& $pio run --target uploa
 
 Push to `main`. The repository's one workflow, `.github/workflows/build.yml`, builds the launcher and every folder under `apps/` on GitHub Actions, on every push and pull request. On `main` it also uploads each app as `firmware.bin` to the release tagged with the app's folder name, creating the release the first time. On its next start, the launcher shows the new build as an update.
 
-To add a new application, copy an existing app folder (for example `apps/screen_check`, or `apps/stopwatch` for LVGL), set `project(...)` in its `CMakeLists.txt` to the new folder name and change `build_dir` in `platformio.ini`, write the app in `main/`, and push. The workflow picks up the new folder by itself. The project name must match the folder name, or the launcher treats a downloaded copy as flashed over USB. Boot images must stay under 1.31 MB, the slot size, and must never contain credentials, because their binaries are public.
+To add a new application, copy an existing app folder (for example `apps/birdnet_viewer`), set `project(...)` in its `CMakeLists.txt` to the new folder name and change `build_dir` in `platformio.ini`, write the app in `main/`, and push. The workflow picks up the new folder by itself. The project name must match the folder name, or the launcher treats a downloaded copy as flashed over USB. Boot images must stay under 1.31 MB, the slot size, and must never contain credentials, because their binaries are public.
 
 The workflow needs the repository's Actions to have **read and write** permission for contents, so it can create releases. It asks for this with `permissions: contents: write`.
 
@@ -171,7 +162,7 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | esptool can't open the port | Close any serial monitor, or other program, using the COM port. |
 | A `sdkconfig.defaults` change has no effect | Delete `sdkconfig.esp32dev` and rebuild. |
 | CI build fails on size | The workflow checks against the default 1 MB app partition. Keep standalone builds under 1 MB, or point the check at the launcher's partition table. |
-| Touches land in the wrong place | Run the `touchscreen_cal` app from the launcher. Every app uses the saved calibration. |
+| Touches land in the wrong place | The built-in calibration is used, and a calibration saved earlier is still applied. |
 
 ## Tested versions
 
@@ -186,6 +177,5 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | Compiler | `toolchain-xtensa-esp-elf` 15.2.0+20251204 |
 | CMake / Ninja | 3.30.2 / 1.9.0 (PlatformIO packages) |
 | esptool | 4.11.0 |
-| LVGL | 9.6.0 (ESP-IDF component manager, pinned by `dependencies.lock`) |
 | USB-serial chip | WCH CH340 (USB ID 1A86:7523) |
 | CI | GitHub Actions `ubuntu-latest`, Python 3.12, PlatformIO from `pip` |

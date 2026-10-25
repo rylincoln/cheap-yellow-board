@@ -1,3 +1,0 @@
-## Fetched by the ESP-IDF component manager at build time.
-dependencies:
-  lvgl/lvgl: "^9.2.0"

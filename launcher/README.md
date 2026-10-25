@@ -28,7 +28,7 @@ No binary carries credentials, the launcher included. The launcher and every boo
 
 | Key | Set by |
 |---|---|
-| `wifi_ssid`, `wifi_pass` | The launcher's network chooser or phone setup, or the `wifi_checker` CONNECT screen |
+| `wifi_ssid`, `wifi_pass` | The launcher's network chooser or phone setup |
 | `birdnet_url` | Phone setup; when unset, `birdnet_viewer` uses `http://birdnet.local` |
 | `ha_url`, `ha_token` | Phone setup: the Home Assistant address and long-lived access token |
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Phone setup: the four sensor entity IDs, such as `sensor.some_name` |

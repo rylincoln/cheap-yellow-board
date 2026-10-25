@@ -18,15 +18,7 @@ Flash the launcher once over USB. On every power-on it shows the apps stored in 
 | Folder | Contents |
 |---|---|
 | [`launcher/`](launcher/README.md) | The launcher, its custom second-stage bootloader and the partition table |
-| [`apps/wifi_checker/`](apps/wifi_checker/README.md) | Wi-Fi, Bluetooth LE and LAN scanner |
 | [`apps/birdnet_viewer/`](apps/birdnet_viewer/README.md) | BirdNET bird photo viewer |
-| [`apps/screen_check/`](apps/screen_check/README.md) | Screen color test |
-| [`apps/touchscreen_cal/`](apps/touchscreen_cal/README.md) | Touchscreen calibration |
-| [`apps/stopwatch/`](apps/stopwatch/README.md) | LVGL stopwatch |
-| [`apps/gear_roll/`](apps/gear_roll/README.md) | LVGL gear demo |
-| [`apps/Datalogger/`](apps/Datalogger/README.md) | Voltage logger on GPIO35 |
-| [`apps/CatMouse/`](apps/CatMouse/README.md) | Maze game in the manner of PAC-MAN |
-| [`apps/bluetooth_diag/`](apps/bluetooth_diag/README.md) | Bluetooth Classic and LE diagnostics |
 | `components/cyd_display/` | Display, 5x7 font, patterns, touch and board detection, shared by every project |
 | [`docs/`](docs/INSTALL.md) | Installing the tools, building, flashing and publishing |
 

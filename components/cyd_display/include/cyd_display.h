@@ -67,8 +67,8 @@ typedef struct {
 
 /* Affine touch calibration: x = xa*raw_x + xb*raw_y + xc, and likewise for
    y. Unlike a per-axis scale, it also corrects a panel that is rotated or
-   skewed against the LCD. The touchscreen_cal image saves one in NVS
-   (cyd_config/touch_cal) and every image's driver applies it. */
+   skewed against the LCD. No app writes one now; a saved one in NVS
+   (cyd_config/touch_cal) is still applied by every image's driver. */
 typedef struct {
     float xa, xb, xc;
     float ya, yb, yc;

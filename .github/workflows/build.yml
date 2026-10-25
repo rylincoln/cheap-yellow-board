@@ -35,7 +35,7 @@ jobs:
       projects: ${{ steps.projects.outputs.projects }}
     steps:
       - uses: actions/checkout@v4
-      # ["launcher", "CatMouse", ...]: a new folder under apps/ builds by itself.
+      # ["launcher", "home_dashboard", ...]: a new folder under apps/ builds by itself.
       - id: projects
         run: |
           list=$({ echo launcher; ls -d apps/*/ | xargs -n1 basename; } | jq -R . | jq -cs .)
