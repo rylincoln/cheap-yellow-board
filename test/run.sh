@@ -11,4 +11,7 @@ build/host-tests/form_check
 cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_readings.c apps/home_dashboard/main/readings.c -lm -o build/host-tests/readings
 build/host-tests/readings
 
+cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_bigfont.c apps/home_dashboard/main/bigfont.c apps/home_dashboard/main/bigfont_data.c -o build/host-tests/bigfont
+build/host-tests/bigfont
+
 echo "host tests passed"
