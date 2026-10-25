@@ -1,6 +1,6 @@
 /* Phone setup: while it runs, the board is also an open Wi-Fi access point
-   with a captive web page for the network, its password and the BirdNET
-   server, so a phone can do what the on-screen keyboard does. */
+   with a captive web page for the network, its password, the BirdNET server
+   and Home Assistant, so a phone can do what the on-screen keyboard does. */
 #pragma once
 
 #include <stdbool.h>
@@ -8,16 +8,27 @@
 #include "esp_err.h"
 #include "esp_wifi.h"
 
+#define PHONE_HA_SENSOR_COUNT 4 /* upstairs, downstairs, outside, battery */
+
+/* What the page submits, and what it shows when drawn again. */
+typedef struct {
+    char ssid[33];
+    char password[65];
+    char birdnet_url[128];
+    char ha_url[128];
+    char ha_token[256];
+    char ha_sensors[PHONE_HA_SENSOR_COUNT][96];
+} phone_settings_t;
+
 /* Stores what the page submitted, on the web server's task. The password is
-   empty when the phone left the field blank. */
-typedef bool (*phone_setup_save_fn)(const char *ssid, const char *password,
-                                    const char *birdnet_url);
+   empty when the phone left the field blank, and so is the token. */
+typedef bool (*phone_setup_save_fn)(const phone_settings_t *settings);
 
 typedef struct {
     const wifi_ap_record_t *networks; /* offered on the page, in this order */
     int network_count;
-    const char *ssid;        /* the saved network, filled in on the page */
-    const char *birdnet_url; /* the saved server, or "" */
+    const phone_settings_t *saved; /* shown on the page; password and token ignored */
+    bool ha_token_saved;           /* says "blank keeps the saved token" */
     phone_setup_save_fn save;
 } phone_setup_config_t;
 

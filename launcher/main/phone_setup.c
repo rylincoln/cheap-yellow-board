@@ -19,7 +19,8 @@
 #define SSID_MAX 32
 #define PASSWORD_MAX 64
 #define URL_MAX 127   /* birdnet_viewer keeps the server in 128 bytes */
-#define FORM_MAX 768  /* the three fields, percent-encoded */
+#define FORM_MAX 3072 /* every field, percent-encoded */
+#define TOKEN_MAX 255
 #define DNS_PORT 53
 #define DNS_PACKET_MAX 512
 
@@ -42,8 +43,8 @@ static char portal_url[32]; /* owned here: the DHCP server keeps the pointer */
 static uint32_t address_bytes; /* network byte order, as in a DNS answer */
 static offered_network_t networks[MAX_NETWORKS];
 static int network_count;
-static char saved_ssid[SSID_MAX + 1];
-static char saved_url[URL_MAX + 1];
+static phone_settings_t saved_settings; /* password and token left empty */
+static bool token_saved;
 
 /* ---- DNS: every name is the board, so phones find the page ---- */
 
@@ -133,6 +134,7 @@ static const char PAGE_HEAD[] =
     "background:#f6f7f9;color:#111}"
     "main{max-width:420px;margin:auto}h1{font-size:22px;margin:0 0 4px}"
     "p{margin:0 0 14px;color:#445}small{color:#667}"
+    "h2{font-size:18px;margin:28px 0 0}"
     "label{display:block;font-size:13px;color:#445;margin:16px 0 4px}"
     "input{box-sizing:border-box;width:100%;font-size:17px;padding:10px;"
     "border:1px solid #c9ced6;border-radius:8px;background:#fff;color:#111}"
@@ -186,8 +188,8 @@ static void begin_page(httpd_req_t *request)
 
 /* The form, with an error above it when a submission was refused. The saved
    password is never sent: anyone near the open access point could read it. */
-static void send_form(httpd_req_t *request, const char *error, const char *ssid,
-                      const char *url)
+static void send_form(httpd_req_t *request, const char *error,
+                      const phone_settings_t *settings)
 {
     begin_page(request);
     httpd_resp_sendstr_chunk(request,
@@ -217,7 +219,7 @@ static void send_form(httpd_req_t *request, const char *error, const char *ssid,
                              "<input name=\"ssid\" maxlength=\"32\" required "
                              "autocapitalize=\"none\" autocorrect=\"off\" spellcheck=\"false\" "
                              "placeholder=\"Network name\" value=\"");
-    send_escaped(request, ssid);
+    send_escaped(request, settings->ssid);
     httpd_resp_sendstr_chunk(
         request,
         "\"><label>Password</label>"
@@ -227,19 +229,50 @@ static void send_form(httpd_req_t *request, const char *error, const char *ssid,
         "onclick=\"this.form.pass.type=this.checked?'text':'password'\">Show password</label>"
         "<small>Leave it blank for an open network. For the network already saved, "
         "blank keeps its password.</small>"
-        "<label>BirdNET server <small>for the BirdNET viewer</small></label>"
+        "<label>BirdNET server <small>for birds on the dashboard</small></label>"
         "<input name=\"url\" maxlength=\"127\" inputmode=\"url\" autocapitalize=\"none\" "
         "autocorrect=\"off\" spellcheck=\"false\" placeholder=\"http://birdnet.local\" "
         "value=\"");
-    send_escaped(request, url);
-    httpd_resp_sendstr_chunk(request, "\"><button class=\"go\">Save and connect</button>"
+    send_escaped(request, settings->birdnet_url);
+    httpd_resp_sendstr_chunk(
+        request,
+        "\"><h2>Home Assistant</h2>"
+        "<label>Address</label>"
+        "<input name=\"ha_url\" maxlength=\"127\" inputmode=\"url\" autocapitalize=\"none\" "
+        "autocorrect=\"off\" spellcheck=\"false\" placeholder=\"http://homeassistant.local:8123\" "
+        "value=\"");
+    send_escaped(request, settings->ha_url);
+    httpd_resp_sendstr_chunk(
+        request,
+        "\"><label>Long-lived access token</label>"
+        "<input name=\"ha_token\" type=\"password\" maxlength=\"255\" autocapitalize=\"none\" "
+        "autocorrect=\"off\" spellcheck=\"false\">");
+    if (token_saved) {
+        httpd_resp_sendstr_chunk(request, "<small>Blank keeps the saved token.</small>");
+    }
+    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+    static const char *const SENSOR_LABELS[PHONE_HA_SENSOR_COUNT] = {
+        "Upstairs", "Downstairs", "Outside", "Shop battery"};
+    for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
+        httpd_resp_sendstr_chunk(request, "<label>");
+        httpd_resp_sendstr_chunk(request, SENSOR_LABELS[i]);
+        httpd_resp_sendstr_chunk(request, "</label><input name=\"");
+        httpd_resp_sendstr_chunk(request, SENSOR_KEYS[i]);
+        httpd_resp_sendstr_chunk(
+            request, "\" maxlength=\"95\" autocapitalize=\"none\" autocorrect=\"off\" "
+                     "spellcheck=\"false\" placeholder=\"sensor.some_name\" value=\"");
+        send_escaped(request, settings->ha_sensors[i]);
+        httpd_resp_sendstr_chunk(request, "\">");
+    }
+    httpd_resp_sendstr_chunk(request, "<button class=\"go\">Save and connect</button>"
                                       "</form></main></body></html>");
     httpd_resp_sendstr_chunk(request, NULL);
 }
 
 static esp_err_t page_get(httpd_req_t *request)
 {
-    send_form(request, NULL, saved_ssid, saved_url);
+    send_form(request, NULL, &saved_settings);
     return ESP_OK;
 }
 
@@ -271,7 +304,7 @@ static bool form_decode(char *text)
    it is too long for size or holds a NUL. */
 static bool form_field(const char *form, const char *key, char *value, size_t size)
 {
-    char encoded[FORM_MAX];
+    char encoded[3 * TOKEN_MAX + 1]; /* the longest field, percent-encoded */
     esp_err_t result = httpd_query_key_value(form, key, encoded, sizeof(encoded));
     value[0] = '\0';
     if (result == ESP_ERR_NOT_FOUND) {
@@ -286,7 +319,8 @@ static bool form_field(const char *form, const char *key, char *value, size_t si
 
 static esp_err_t save_post(httpd_req_t *request)
 {
-    char form[FORM_MAX];
+    static char form[FORM_MAX]; /* the server runs one handler at a time */
+    static phone_settings_t submitted;
     if (request->content_len >= sizeof(form)) {
         httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Form too long");
         return ESP_FAIL;
@@ -304,36 +338,52 @@ static esp_err_t save_post(httpd_req_t *request)
     }
     form[received] = '\0';
 
-    char ssid[SSID_MAX + 1];
-    char password[PASSWORD_MAX + 1];
-    char url[URL_MAX + 1];
-    bool ssid_ok = form_field(form, "ssid", ssid, sizeof(ssid));
-    bool password_ok = form_field(form, "pass", password, sizeof(password)) &&
-                       form_password_valid(password);
-    bool url_ok = form_field(form, "url", url, sizeof(url)) && form_url_valid(url, sizeof(url));
-    const char *error = !ssid_ok          ? "The network name is too long."
-                        : ssid[0] == '\0' ? "Choose or type a network."
-                        : !password_ok    ? "The password must be 8 to 63 characters."
-                        : !url_ok         ? "The BirdNET server must be an http:// address."
-                                          : NULL;
-    if (error == NULL && !save_settings(ssid, password, url)) {
+    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+    bool ssid_ok = form_field(form, "ssid", submitted.ssid, sizeof(submitted.ssid));
+    bool password_ok = form_field(form, "pass", submitted.password, sizeof(submitted.password)) &&
+                       form_password_valid(submitted.password);
+    bool url_ok = form_field(form, "url", submitted.birdnet_url, sizeof(submitted.birdnet_url)) &&
+                  form_url_valid(submitted.birdnet_url, sizeof(submitted.birdnet_url));
+    bool ha_url_ok = form_field(form, "ha_url", submitted.ha_url, sizeof(submitted.ha_url)) &&
+                     form_url_valid(submitted.ha_url, sizeof(submitted.ha_url));
+    bool token_ok = form_field(form, "ha_token", submitted.ha_token, sizeof(submitted.ha_token));
+    bool sensors_ok = true;
+    for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
+        sensors_ok = form_field(form, SENSOR_KEYS[i], submitted.ha_sensors[i],
+                                sizeof(submitted.ha_sensors[i])) &&
+                     form_entity_id_valid(submitted.ha_sensors[i]) && sensors_ok;
+    }
+    const char *error = !ssid_ok                    ? "The network name is too long."
+                        : submitted.ssid[0] == '\0' ? "Choose or type a network."
+                        : !password_ok              ? "The password must be 8 to 63 characters."
+                        : !url_ok                   ? "The BirdNET server must be an http:// address."
+                        : !ha_url_ok                ? "The Home Assistant address must be an http:// address."
+                        : !token_ok                 ? "The token is too long."
+                        : !sensors_ok               ? "Sensor IDs look like sensor.some_name."
+                                                    : NULL;
+    if (error == NULL && !save_settings(&submitted)) {
         error = "The board could not save that. Try again.";
     }
     if (error != NULL) {
-        send_form(request, error, ssid, url);
+        send_form(request, error, &submitted);
+        memset(submitted.password, 0, sizeof(submitted.password));
+        memset(submitted.ha_token, 0, sizeof(submitted.ha_token));
         return ESP_OK;
     }
 
     begin_page(request);
     httpd_resp_sendstr_chunk(request, "<h1>Saved</h1><p>The board is joining <b>");
-    send_escaped(request, ssid);
+    send_escaped(request, submitted.ssid);
     httpd_resp_sendstr_chunk(request, "</b> now. Your phone will leave ");
     send_escaped(request, network_name);
     httpd_resp_sendstr_chunk(request, " in a moment; that's expected.</p>"
                                       "<p>You can close this page.</p></main></body></html>");
     httpd_resp_sendstr_chunk(request, NULL);
     saved = true;
-    ESP_LOGI(TAG, "A phone saved Wi-Fi network %s", ssid);
+    ESP_LOGI(TAG, "A phone saved Wi-Fi network %s", submitted.ssid);
+    memset(submitted.password, 0, sizeof(submitted.password));
+    memset(submitted.ha_token, 0, sizeof(submitted.ha_token));
     return ESP_OK;
 }
 
@@ -390,8 +440,10 @@ static void copy_config(const phone_setup_config_t *config)
         offered->ssid[SSID_MAX] = '\0';
         offered->secured = ap->authmode != WIFI_AUTH_OPEN;
     }
-    strlcpy(saved_ssid, config->ssid, sizeof(saved_ssid));
-    strlcpy(saved_url, config->birdnet_url, sizeof(saved_url));
+    saved_settings = *config->saved;
+    memset(saved_settings.password, 0, sizeof(saved_settings.password));
+    memset(saved_settings.ha_token, 0, sizeof(saved_settings.ha_token));
+    token_saved = config->ha_token_saved;
     save_settings = config->save;
     saved = false;
 }

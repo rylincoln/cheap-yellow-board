@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "form_check.h"
 #include "phone_setup.h"
 #include "qrcode.h"
 
@@ -275,28 +276,47 @@ static bool wifi_network_saved(void)
     return ssid[0] != '\0';
 }
 
-/* Stores what the phone setup page submitted, for the launcher and every
-   image. The page never shows the saved password, so a blank one keeps it
-   when the network stays the same. A blank server goes back to the viewer's
-   default. Runs on the web server's task. */
-static bool save_phone_settings(const char *ssid, const char *password, const char *birdnet_url)
+/* Sets a setting, or erases it when blank. A key that was never set counts
+   as erased. */
+static bool store_or_erase(nvs_handle_t nvs, const char *key, const char *value)
 {
+    esp_err_t result = value[0] != '\0' ? nvs_set_str(nvs, key, value) : nvs_erase_key(nvs, key);
+    return result == ESP_OK || result == ESP_ERR_NVS_NOT_FOUND;
+}
+
+/* Stores what the phone setup page submitted, for the launcher and every
+   image. The page never shows the saved password or token, so a blank
+   password keeps it when the network stays the same, and a blank token when
+   the Home Assistant address does. A blank server, address or sensor goes
+   back to unset. Runs on the web server's task. */
+static bool save_phone_settings(const phone_settings_t *settings)
+{
+    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
     char saved_ssid[33];
     char saved_password[65];
+    char saved_ha_url[128];
+    const char *password = settings->password;
     load_config_string("wifi_ssid", "", saved_ssid, sizeof(saved_ssid));
-    if (password[0] == '\0' && strcmp(ssid, saved_ssid) == 0) {
+    load_config_string("ha_url", "", saved_ha_url, sizeof(saved_ha_url));
+    if (password[0] == '\0' && strcmp(settings->ssid, saved_ssid) == 0) {
         load_config_string("wifi_pass", "", saved_password, sizeof(saved_password));
         password = saved_password;
     }
     nvs_handle_t nvs;
-    if (!store_wifi_network(ssid, password) ||
+    if (!store_wifi_network(settings->ssid, password) ||
         nvs_open(CONFIG_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
         return false;
     }
-    esp_err_t result = birdnet_url[0] != '\0' ? nvs_set_str(nvs, "birdnet_url", birdnet_url)
-                                              : nvs_erase_key(nvs, "birdnet_url");
-    bool stored = (result == ESP_OK || result == ESP_ERR_NVS_NOT_FOUND) &&
-                  nvs_commit(nvs) == ESP_OK;
+    bool stored = store_or_erase(nvs, "birdnet_url", settings->birdnet_url) &&
+                  store_or_erase(nvs, "ha_url", settings->ha_url);
+    if (stored && !form_token_kept(settings->ha_token, settings->ha_url, saved_ha_url)) {
+        stored = store_or_erase(nvs, "ha_token", settings->ha_token);
+    }
+    for (int i = 0; stored && i < PHONE_HA_SENSOR_COUNT; ++i) {
+        stored = store_or_erase(nvs, SENSOR_KEYS[i], settings->ha_sensors[i]);
+    }
+    stored = stored && nvs_commit(nvs) == ESP_OK;
     nvs_close(nvs);
     return stored;
 }
@@ -1853,15 +1873,22 @@ static void draw_phone_qr(void)
    true when one was saved; the network task is then joining it. */
 static bool phone_setup_screen(const network_list_t *list)
 {
+    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+    static phone_settings_t saved; /* the page keeps its own copy */
     char ssid[33];
-    char birdnet_url[128];
-    load_config_string("wifi_ssid", "", ssid, sizeof(ssid));
-    load_config_string("birdnet_url", "", birdnet_url, sizeof(birdnet_url));
+    load_config_string("wifi_ssid", "", saved.ssid, sizeof(saved.ssid));
+    load_config_string("birdnet_url", "", saved.birdnet_url, sizeof(saved.birdnet_url));
+    load_config_string("ha_url", "", saved.ha_url, sizeof(saved.ha_url));
+    load_config_string("ha_token", "", saved.ha_token, sizeof(saved.ha_token));
+    for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
+        load_config_string(SENSOR_KEYS[i], "", saved.ha_sensors[i], sizeof(saved.ha_sensors[i]));
+    }
     const phone_setup_config_t config = {
         .networks = list->networks,
         .network_count = list->count,
-        .ssid = ssid,
-        .birdnet_url = birdnet_url,
+        .saved = &saved,
+        .ha_token_saved = saved.ha_token[0] != '\0',
         .save = save_phone_settings,
     };
     esp_err_t result = phone_setup_start(&config);
