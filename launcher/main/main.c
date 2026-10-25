@@ -26,13 +26,13 @@
 #include "phone_setup.h"
 #include "qrcode.h"
 
-/* Each branch of this repository is one application. GitHub Actions on the
-   branch publishes its build as IMAGE_ASSET_NAME on a release tagged with
-   the branch name; branches without one are not offered. */
+/* Each folder under apps/ is one application. GitHub Actions builds each
+   and publishes it as IMAGE_ASSET_NAME on a release tagged with the folder
+   name, which is also its CMake project name. Every release with that asset
+   is offered. Build with -DIMAGE_REPO='"owner/repo"' to use another repo. */
 #ifndef IMAGE_REPO
-#define IMAGE_REPO "rftek/cheap-yellow-board"
+#define IMAGE_REPO "rylincoln/cheap-yellow-board"
 #endif
-#define BRANCHES_URL "https://api.github.com/repos/" IMAGE_REPO "/branches?per_page=100"
 #define RELEASES_URL "https://api.github.com/repos/" IMAGE_REPO "/releases?per_page=100"
 #define IMAGE_ASSET_NAME "firmware.bin"
 
@@ -51,7 +51,7 @@
 #define SLOT_COUNT 2
 #define MAX_REMOTE_IMAGES 16
 #define MAX_ENTRIES (SLOT_COUNT + MAX_REMOTE_IMAGES)
-#define BRANCH_NAME_SIZE 48
+#define IMAGE_NAME_SIZE 48
 /* The menu fills the columns left of the brightness slider: the title, the
    visible entries, the scroll row, then the info row. */
 #define MENU_COLUMNS (CYD_TEXT_COLUMNS - BRIGHTNESS_COLUMNS)
@@ -107,12 +107,12 @@ static const char *TAG = "cyd_launcher";
 typedef struct {
     const esp_partition_t *partition;
     bool valid;
-    char name[BRANCH_NAME_SIZE];   /* branch name */
+    char name[IMAGE_NAME_SIZE];   /* app name */
     char version[VERSION_SIZE];    /* empty when flashed some other way */
 } slot_t;
 
 typedef struct {
-    char name[BRANCH_NAME_SIZE]; /* branch name */
+    char name[IMAGE_NAME_SIZE]; /* app name, the release tag */
     char url[256];
     char version[VERSION_SIZE];
     uint32_t size;
@@ -203,7 +203,7 @@ static void load_slots(void)
         if (!have_nvs || nvs_get_str(nvs, key, slot->version, &version_size) != ESP_OK) {
             slot->version[0] = '\0';
         }
-        /* Images are named after their branch, so a different project name
+        /* Images are named after their release tag, so a different project name
            means the slot was reflashed over USB since the download. */
         if (strcmp(slot->name, description.project_name) != 0) {
             snprintf(slot->name, sizeof(slot->name), "%s", description.project_name);
@@ -217,7 +217,7 @@ static void load_slots(void)
     }
 }
 
-/* Records which branch and version a slot holds; NULL name clears it. */
+/* Records which app and version a slot holds; NULL name clears it. */
 static void save_slot(int slot, const char *name, const char *version)
 {
     nvs_handle_t nvs;
@@ -546,7 +546,7 @@ static int scrolled_offset(int offset, int count, int rows, int direction)
     return offset < 0 ? 0 : offset;
 }
 
-/* True when a slot already holds this exact build of the branch. */
+/* True when a slot already holds this exact build of the app. */
 static bool remote_is_stored(const remote_image_t *image)
 {
     for (int i = 0; i < SLOT_COUNT; ++i) {
@@ -558,8 +558,8 @@ static bool remote_is_stored(const remote_image_t *image)
     return false;
 }
 
-/* Stored images first, then branches whose current build is not stored:
-   new branches and newer builds of stored ones. */
+/* Stored images first, then releases whose current build is not stored:
+   new apps and newer builds of stored ones. */
 static void build_entries(void)
 {
     entry_count = 0;
@@ -940,29 +940,17 @@ static bool json_copy_string(const char *value, char *output, size_t size)
     return *value == '"';
 }
 
-/* Branches that are not boot images: the launcher itself, the legacy main
-   branch and the documentation. */
-static bool branch_is_excluded(const char *branch)
-{
-    static const char *const excluded[] = {"bootloader", "main", "How_to_Build"};
-    for (size_t i = 0; i < sizeof(excluded) / sizeof(excluded[0]); ++i) {
-        if (strcmp(branch, excluded[i]) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Finds IMAGE_ASSET_NAME on the release tagged with the branch name. Each
+/* Finds IMAGE_ASSET_NAME on the release with this tag. Each
    asset object ends with its browser_download_url; its name, size and
    updated_at come earlier in the same object. */
-static bool find_branch_image(const char *json, const char *branch, remote_image_t *image)
+static bool find_release_image(const char *json, const char *tag_wanted, remote_image_t *image)
 {
     const char *end = json + strlen(json);
     for (const char *tag = json_value(json, end, "tag_name"); tag != NULL;
          tag = json_value(tag, end, "tag_name")) {
-        char tag_name[BRANCH_NAME_SIZE];
-        if (!json_copy_string(tag, tag_name, sizeof(tag_name)) || strcmp(tag_name, branch) != 0) {
+        char tag_name[IMAGE_NAME_SIZE];
+        if (!json_copy_string(tag, tag_name, sizeof(tag_name)) ||
+            strcmp(tag_name, tag_wanted) != 0) {
             continue;
         }
         const char *release_end = json_value(tag, end, "tag_name");
@@ -984,7 +972,7 @@ static bool find_branch_image(const char *json, const char *branch, remote_image
                                  image->version, sizeof(image->version))) {
                 const char *size = json_last_value(object_start, url, "size");
                 image->size = size != NULL ? (uint32_t)strtoul(size, NULL, 10) : 0;
-                snprintf(image->name, sizeof(image->name), "%s", branch);
+                snprintf(image->name, sizeof(image->name), "%s", tag_wanted);
                 return true;
             }
             object_start = url;
@@ -1020,12 +1008,17 @@ static esp_err_t github_get(esp_http_client_handle_t client, http_buffer_t *buff
     return ESP_OK;
 }
 
-/* Lists the repository's branches and keeps those with a published image. */
-static net_state_t fetch_branch_images(void)
+static int image_name_order(const void *left, const void *right)
+{
+    return strcmp(((const remote_image_t *)left)->name, ((const remote_image_t *)right)->name);
+}
+
+/* Lists the repository's releases that carry a boot image, by name. */
+static net_state_t fetch_release_images(void)
 {
     http_buffer_t buffer = {0};
     esp_http_client_config_t config = {
-        .url = BRANCHES_URL,
+        .url = RELEASES_URL,
         .timeout_ms = 10000,
         .buffer_size = 2048,
         .buffer_size_tx = 1024,
@@ -1041,44 +1034,36 @@ static net_state_t fetch_branch_images(void)
     esp_http_client_set_header(client, "Accept", "application/vnd.github+json");
 
     net_state_t state = NET_GITHUB_ERROR;
-    /* Static: the network task's stack also carries the TLS session. */
-    static char branches[MAX_REMOTE_IMAGES][BRANCH_NAME_SIZE];
-    int branch_count = 0;
-    set_activity("GET branches");
-    if (github_get(client, &buffer, BRANCHES_URL) == ESP_OK) {
+    set_activity("GET releases");
+    if (github_get(client, &buffer, RELEASES_URL) == ESP_OK) {
         const char *end = buffer.data + buffer.length;
-        for (const char *name = json_value(buffer.data, end, "name");
-             name != NULL && branch_count < MAX_REMOTE_IMAGES;
-             name = json_value(name, end, "name")) {
-            if (json_copy_string(name, branches[branch_count], sizeof(branches[0])) &&
-                !branch_is_excluded(branches[branch_count])) {
-                ++branch_count;
+        remote_count = 0;
+        for (const char *tag = json_value(buffer.data, end, "tag_name");
+             tag != NULL && remote_count < MAX_REMOTE_IMAGES;
+             tag = json_value(tag, end, "tag_name")) {
+            char tag_name[IMAGE_NAME_SIZE];
+            remote_image_t *image = &remote_images[remote_count];
+            if (!json_copy_string(tag, tag_name, sizeof(tag_name))) {
+                continue;
+            }
+            if (find_release_image(buffer.data, tag_name, image)) {
+                ESP_LOGI(TAG, "Release %s: %s, %u bytes", image->name, image->version,
+                         (unsigned)image->size);
+                ++remote_count;
+            } else {
+                ESP_LOGW(TAG, "Release %s has no %s", tag_name, IMAGE_ASSET_NAME);
             }
         }
-        set_activity("GET releases");
-        if (github_get(client, &buffer, RELEASES_URL) == ESP_OK) {
-            remote_count = 0;
-            for (int i = 0; i < branch_count; ++i) {
-                remote_image_t *image = &remote_images[remote_count];
-                if (find_branch_image(buffer.data, branches[i], image)) {
-                    ESP_LOGI(TAG, "Branch %s: %s, %u bytes", image->name, image->version,
-                             (unsigned)image->size);
-                    ++remote_count;
-                } else {
-                    ESP_LOGW(TAG, "Branch %s has no %s release yet", branches[i],
-                             IMAGE_ASSET_NAME);
-                }
-            }
-            set_activity("%d on GitHub", remote_count);
-            state = NET_READY;
-        }
+        qsort(remote_images, remote_count, sizeof(remote_images[0]), image_name_order);
+        set_activity("%d on GitHub", remote_count);
+        state = NET_READY;
     }
     esp_http_client_cleanup(client);
     free(buffer.data);
     return state;
 }
 
-/* Joins Wi-Fi and lists the branches, then again each time the network
+/* Joins Wi-Fi and lists the releases, then again each time the network
    chooser saves a network. */
 static void network_task(void *argument)
 {
@@ -1090,7 +1075,7 @@ static void network_task(void *argument)
     while (true) {
         if (started && wifi_join()) {
             net_state = NET_FETCHING;
-            net_state = fetch_branch_images();
+            net_state = fetch_release_images();
         } else {
             ESP_LOGW(TAG, "Wi-Fi did not connect; keeping stored images only");
             net_state = NET_OFFLINE;
@@ -1100,10 +1085,10 @@ static void network_task(void *argument)
     }
 }
 
-/* Has the network task join the saved network and list the branches again. */
+/* Has the network task join the saved network and list the releases again. */
 static void rejoin_wifi(void)
 {
-    /* Set here too, so the menu drops the branches before they are refetched. */
+    /* Set here too, so the menu drops the releases before they are refetched. */
     net_state = NET_CONNECTING;
     xTaskNotifyGive(network_task_handle);
 }
@@ -2127,7 +2112,7 @@ void app_main(void)
 
         net_state_t state = net_state;
         if (state != shown_state) {
-            /* The branches show only while the list is complete. */
+            /* The releases show only while the list is complete. */
             shown_state = state;
             build_entries();
             draw_entries();
