@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -14,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "form_check.h"
 
 #define MAX_NETWORKS 24
 #define SSID_MAX 32
@@ -284,41 +284,6 @@ static bool form_field(const char *form, const char *key, char *value, size_t si
     return true;
 }
 
-/* Empty for an open network, 8 to 63 characters, or 64 hex digits. */
-static bool password_valid(const char *password)
-{
-    size_t length = strlen(password);
-    if (length == 0 || (length >= 8 && length <= 63)) {
-        return true;
-    }
-    for (size_t i = 0; i < length; ++i) {
-        if (!isxdigit((unsigned char)password[i])) {
-            return false;
-        }
-    }
-    return length == 64;
-}
-
-/* Empty, or an http(s) address; a bare host name gets "http://". */
-static bool url_valid(char *url, size_t size)
-{
-    size_t length = strlen(url);
-    if (length == 0) {
-        return true;
-    }
-    if (strchr(url, ' ') != NULL) {
-        return false;
-    }
-    if (strstr(url, "://") == NULL) {
-        if (length + 7 >= size) {
-            return false;
-        }
-        memmove(url + 7, url, length + 1);
-        memcpy(url, "http://", 7);
-    }
-    return strncasecmp(url, "http://", 7) == 0 || strncasecmp(url, "https://", 8) == 0;
-}
-
 static esp_err_t save_post(httpd_req_t *request)
 {
     char form[FORM_MAX];
@@ -344,8 +309,8 @@ static esp_err_t save_post(httpd_req_t *request)
     char url[URL_MAX + 1];
     bool ssid_ok = form_field(form, "ssid", ssid, sizeof(ssid));
     bool password_ok = form_field(form, "pass", password, sizeof(password)) &&
-                       password_valid(password);
-    bool url_ok = form_field(form, "url", url, sizeof(url)) && url_valid(url, sizeof(url));
+                       form_password_valid(password);
+    bool url_ok = form_field(form, "url", url, sizeof(url)) && form_url_valid(url, sizeof(url));
     const char *error = !ssid_ok          ? "The network name is too long."
                         : ssid[0] == '\0' ? "Choose or type a network."
                         : !password_ok    ? "The password must be 8 to 63 characters."

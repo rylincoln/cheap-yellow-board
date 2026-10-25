@@ -23,6 +23,12 @@ env:
   PLATFORMIO_BUILD_DIR: ${{ github.workspace }}/build
 
 jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh test/run.sh
+
   list:
     runs-on: ubuntu-latest
     outputs:
