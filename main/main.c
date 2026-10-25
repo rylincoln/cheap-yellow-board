@@ -1252,7 +1252,7 @@ static void probe_device(bt_device_t *device)
 
 /* A screen of text rows; the last row is reserved for a footer. */
 typedef struct {
-    char text[CYD_TEXT_ROWS][CYD_TEXT_COLUMNS + 1];
+    char text[CYD_TEXT_ROWS][CYD_TEXT_MAX_COLUMNS + 1]; /* drawing cuts to the panel */
     uint16_t color[CYD_TEXT_ROWS];
     int count;
 } page_t;
@@ -1478,7 +1478,7 @@ static void open_detail(bt_device_t *device)
 /* ---- Configuration pages ---- */
 
 typedef struct {
-    char text[CYD_TEXT_COLUMNS + 1];
+    char text[CYD_TEXT_MAX_COLUMNS + 1]; /* drawing cuts to the panel */
     uint16_t color;
     int8_t setting; /* index into settings, or -1 for an information row */
 } config_row_t;
