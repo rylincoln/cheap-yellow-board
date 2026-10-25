@@ -33,13 +33,20 @@ typedef struct {
     const char *name;
 } target_t;
 
-static const target_t corners[CORNER_COUNT] = {
-    {TARGET_INSET, TARGET_INSET, "UPPER LEFT"},
-    {CYD_LCD_WIDTH - 1 - TARGET_INSET, TARGET_INSET, "UPPER RIGHT"},
-    {CYD_LCD_WIDTH - 1 - TARGET_INSET, CYD_LCD_HEIGHT - 1 - TARGET_INSET, "LOWER RIGHT"},
-    {TARGET_INSET, CYD_LCD_HEIGHT - 1 - TARGET_INSET, "LOWER LEFT"},
-};
-static const target_t center = {CYD_LCD_WIDTH / 2, CYD_LCD_HEIGHT / 2, "CENTER"};
+/* Placed by place_targets once the board, and so the panel size, is known. */
+static target_t corners[CORNER_COUNT];
+static target_t center;
+
+static void place_targets(void)
+{
+    int right = CYD_LCD_WIDTH - 1 - TARGET_INSET;
+    int bottom = CYD_LCD_HEIGHT - 1 - TARGET_INSET;
+    corners[0] = (target_t){TARGET_INSET, TARGET_INSET, "UPPER LEFT"};
+    corners[1] = (target_t){right, TARGET_INSET, "UPPER RIGHT"};
+    corners[2] = (target_t){right, bottom, "LOWER RIGHT"};
+    corners[3] = (target_t){TARGET_INSET, bottom, "LOWER LEFT"};
+    center = (target_t){CYD_LCD_WIDTH / 2, CYD_LCD_HEIGHT / 2, "CENTER"};
+}
 
 typedef struct {
     int first_column;
@@ -298,6 +305,7 @@ static void test_mode(void)
 void app_main(void)
 {
     ESP_ERROR_CHECK(cyd_display_init());
+    place_targets();
     ESP_ERROR_CHECK(cyd_touch_start(&touch_queue));
     while (true) {
         show_intro();

@@ -1,7 +1,19 @@
 #pragma once
 
 /* Display, text and touch support for the ESP32 Cheap Yellow Display,
-   shared by the launcher and the boot images in this repository. */
+   shared by the launcher and the boot images in this repository.
+
+   Several CYD boards are supported. cyd_display_init() identifies the board
+   from its display controller's ID register and sets the panel size, font
+   scale, backlight pin and touch wiring to match, so the same app binary
+   runs on every one of them:
+
+     ESP32-2432S028R  2.8"  ILI9341  320x240  text 17x10 at 3x
+     ESP32-3248S035R  3.5"  ST7796   480x320  text 20x10 at 4x
+
+   A panel that does not answer with a known ID is treated as the 2.8" board.
+   The size macros below are therefore runtime values. Use the _MAX_ ones to
+   size static buffers. */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,15 +22,27 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-#define CYD_LCD_WIDTH 320
-#define CYD_LCD_HEIGHT 240
+int cyd_lcd_width(void);
+int cyd_lcd_height(void);
+int cyd_font_scale(void);
 
-/* 5x7 glyphs in 6x8 cells, scaled up: 17 columns x 10 rows at 3x. */
-#define CYD_FONT_SCALE 3
+/* The detected board, such as "ESP32-3248S035R 3.5\" ST7796 480x320". */
+const char *cyd_board_name(void);
+
+#define CYD_LCD_WIDTH (cyd_lcd_width())
+#define CYD_LCD_HEIGHT (cyd_lcd_height())
+#define CYD_LCD_MAX_WIDTH 480
+#define CYD_LCD_MAX_HEIGHT 320
+
+/* 5x7 glyphs in 6x8 cells, scaled per board so every board has exactly
+   CYD_TEXT_ROWS rows: 17 columns at 3x on 320x240, 20 columns at 4x on 480x320. */
+#define CYD_FONT_SCALE (cyd_font_scale())
+#define CYD_FONT_MAX_SCALE 4
 #define CYD_FONT_WIDTH (6 * CYD_FONT_SCALE)
 #define CYD_FONT_HEIGHT (8 * CYD_FONT_SCALE)
 #define CYD_TEXT_COLUMNS (CYD_LCD_WIDTH / CYD_FONT_WIDTH)
-#define CYD_TEXT_ROWS (CYD_LCD_HEIGHT / CYD_FONT_HEIGHT)
+#define CYD_TEXT_MAX_COLUMNS 20
+#define CYD_TEXT_ROWS 10
 
 #define CYD_COLOR_BLACK 0x0000
 #define CYD_COLOR_WHITE 0xFFFF
@@ -108,7 +132,7 @@ esp_err_t cyd_touch_init(void);
 /* Returns true while the screen is pressed, with the calibrated position. */
 bool cyd_touch_read(cyd_touch_point_t *point);
 
-/* The built-in calibration, from the CYD documentation's raw ranges. */
+/* The built-in calibration for the detected board. */
 void cyd_touch_default_calibration(cyd_touch_calibration_t *calibration);
 
 /* Uses calibration for later taps; NULL restores the default. Not saved. */
