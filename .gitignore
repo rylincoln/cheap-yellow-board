@@ -8,3 +8,5 @@ sdkconfig.*
 .vscode/c_cpp_properties.json
 .superpowers/
 .worktrees/
+dist/
+managed_components/
