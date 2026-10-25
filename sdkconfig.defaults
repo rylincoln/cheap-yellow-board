@@ -8,3 +8,7 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
 # Downloads run TLS on the main task.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Phone setup's page: browsers' request headers can pass the 1 KB default,
+# which the server refuses with HTTP 431.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048

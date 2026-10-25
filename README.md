@@ -21,24 +21,26 @@ Every application branch builds an app binary that runs in either launcher slot.
 
 On power-on, including the EN button, the custom bootloader (`bootloader_components/main`) always starts the launcher. Any other reset, such as the launcher's own restart or an image crashing, goes straight back to the chosen image.
 
-1. The menu immediately lists the stored images, marking the default with `*`, and counts down from 20 seconds. It shows seven entries at a time: the row below them says which (such as `1-7/9`), and its ▲ and ▼ buttons page through the rest.
-2. When the countdown ends, the last-used image boots. The very first time, it is the first stored image.
-3. Tapping anywhere except an image or the network activity, the scroll buttons, brightness slider and the bottom row's other pages included, adds another 20 seconds. Tap an image to boot it right away.
+1. On the very first start, or whenever no network is saved, the Wi-Fi network chooser opens first (see below); the menu and its countdown follow once it closes.
+2. The menu immediately lists the stored images, marking the default with `*`, and counts down from 20 seconds. It shows seven entries at a time: the row below them says which (such as `1-7/9`), and its ▲ and ▼ buttons page through the rest.
+3. When the countdown ends, the last-used image boots. The very first time, it is the first stored image.
+4. Tapping anywhere except an image or the network activity, the scroll buttons, brightness slider and the bottom row's other pages included, adds another 20 seconds. Tap an image to boot it right away.
    - The brightness slider runs down the right edge: `+` at the top, a bar with one segment per level, `-` below it, then the level in percent. `+` and `-` step the backlight by 20%, between 20% and 100%, and tapping a bar segment jumps to its level. The level is saved in NVS (`cyd_config/brightness`). Every image starts at that level, because the shared display driver reads it.
    - The bottom row shows what the launcher is doing, taking turns every 2.5 seconds (tap it to skip ahead): the network activity (`join <network>`, why a join failed such as `no AP found` or `bad password?`, `GET branches`, `GET releases`, `7 on GitHub`, or a GitHub error such as `GitHub err 403`), then, once joined, the IP address and the signal strength with the network name, then the free RAM. New network activity shows at once.
-   - Tapping the bottom row while it shows the network activity opens the Wi-Fi network chooser, and the countdown waits until it closes, then starts over from 20 seconds. The chooser scans once any join in progress has finished, then lists the networks in range, strongest first. Each name appears once, with its strongest access point, and the joined network is in yellow. It pages seven at a time like the menu, `SCAN` scans again, and `BACK` returns to the menu. Tapping a network shows its channel, signal, security and address; `CONNECT` opens an on-screen keyboard with the name and password (filled in if it is the saved network; type the name of a hidden network). `SAVE` stores them in `cyd_config` for the launcher and every image. The launcher then rejoins, with progress on the bottom row, and lists the GitHub branches again.
-4. Meanwhile the launcher joins Wi-Fi and lists the branches of `rftek/cheap-yellow-board`, skipping `bootloader`, `main` and the `How_to_Build` documentation branch. For each remaining branch, up to 16, it looks for `firmware.bin` on the release tagged with the branch name. This usually takes about 10 seconds. Each branch whose current build isn't stored appears in cyan as `+ branch`: either a new application or a newer build of a stored one. Tapping one downloads it into a slot, with progress, and boots it. A branch with no published build yet is skipped and logged. If the saved network doesn't join, the launcher tries the network compiled into it (`WIFI_SSID`), so a mistyped password or a network that's gone can't cut it off. When that one joins, the launcher saves it in place of the saved network and logs it, because the boot images join only the saved network and have no fallback of their own. If Wi-Fi or GitHub still doesn't answer, the bottom row says why and nothing else changes.
+   - Tapping the bottom row while it shows the network activity opens the Wi-Fi network chooser, and the countdown waits until it closes, then starts over from 20 seconds. The chooser scans once any join in progress has finished, then lists the networks in range, strongest first. Each name appears once, with its strongest access point, and the joined network is in yellow. It pages five at a time, `SCAN` scans again, and `BACK` returns to the menu. Tapping a network shows its channel, signal, security and address; `CONNECT` opens an on-screen keyboard with the name and password (filled in if it is the saved network; type the name of a hidden network). `SAVE` stores them in `cyd_config` for the launcher and every image. The launcher then rejoins, with progress on the bottom row, and lists the GitHub branches again.
+   - Below the networks, `PREFER PHONE?` and `PHONE SETUP` offer the same settings from a phone. Tapping either starts phone setup: the board also becomes an open Wi-Fi access point named `CYD-Setup-` plus the last four hex digits of its address, and the screen says how to reach it. `QR CODE` shows a code that joins a phone to it. Phones open the setup page by themselves when they join, because the board answers every DNS name with its own address and redirects their connectivity checks to the page; otherwise browse to `192.168.4.1`. The page lists the networks from the last scan and has fields for the network, password and BirdNET server. It never shows the saved password: leaving the field blank keeps it when the network stays the same, and otherwise means an open network. Saving stores the settings in `cyd_config`, shows `SAVED BY PHONE` on the board, stops the access point and rejoins as above. `BACK` stops the access point without saving.
+5. Meanwhile the launcher joins Wi-Fi and lists the branches of `rftek/cheap-yellow-board`, skipping `bootloader`, `main` and the `How_to_Build` documentation branch. For each remaining branch, up to 16, it looks for `firmware.bin` on the release tagged with the branch name. This usually takes about 10 seconds. Each branch whose current build isn't stored appears in cyan as `+ branch`: either a new application or a newer build of a stored one. Tapping one downloads it into a slot, with progress, and boots it. A branch with no published build yet is skipped and logged. If Wi-Fi or GitHub doesn't answer, the bottom row says why and nothing else changes; tap it to choose another network.
 
 A download replaces the slot holding the same branch if there is one. Otherwise it fills an empty slot, or overwrites the slot that does not boot by default. Each slot remembers its branch and the asset's `updated_at` time in NVS, so a rebuilt branch shows up again as an update.
 
 ### Settings for boot images
 
-Boot images are published publicly, so they carry no credentials. They read their settings from NVS namespace `cyd_config`. The launcher seeds those settings from its private header, but only on the first start after it's flashed with different credentials; it remembers a hash of them as `seed`. Settings changed on the device, with the launcher's network chooser or the `wifi_checker` CONNECT screen, therefore survive restarts. The launcher also joins Wi-Fi with the settings in NVS, so an edited network applies to it too. If that network doesn't join but `WIFI_SSID` does, the launcher overwrites `wifi_ssid` and `wifi_pass` with `WIFI_SSID` and `WIFI_PASSWORD`, so the images it boots can join as well. A network chosen on the device is therefore kept only while it joins when the launcher starts; to go back to it, choose it again.
+No binary carries credentials, the launcher included. The launcher and every boot image read their settings from NVS namespace `cyd_config`, which is set on the device and survives restarts and new builds. Erasing the flash clears it, and the next start opens the network chooser again.
 
-| Key | From `wifi_credentials.h` |
+| Key | Set by |
 |---|---|
-| `wifi_ssid`, `wifi_pass` | `WIFI_SSID`, `WIFI_PASSWORD` |
-| `birdnet_url` | `BIRDNET_BASE_URL`, if defined |
+| `wifi_ssid`, `wifi_pass` | The launcher's network chooser or phone setup, or the `wifi_checker` CONNECT screen |
+| `birdnet_url` | Phone setup; when unset, `birdnet_viewer` uses `http://birdnet.local` |
 
 Flash layout (4 MB, `partitions.csv`):
 
@@ -46,7 +48,7 @@ Flash layout (4 MB, `partitions.csv`):
 |---|---|---|---|
 | `nvs` | 0x9000 | 16 KB | Slot branches and versions; settings for boot images; Wi-Fi data |
 | `otadata` | 0xd000 | 8 KB | Last-chosen image |
-| `factory` | 0x10000 | 1.25 MB | Launcher (about 1.0 MB) |
+| `factory` | 0x10000 | 1.25 MB | Launcher (about 1.1 MB) |
 | `ota_0` | 0x150000 | 1.31 MB | Boot image slot A |
 | `ota_1` | 0x2A0000 | 1.31 MB | Boot image slot B |
 
@@ -54,7 +56,7 @@ Flash layout (4 MB, `partitions.csv`):
 
 Each application branch has `.github/workflows/build.yml`. On every push, GitHub Actions builds the branch and uploads its app binary as `firmware.bin` to the release tagged with the branch name, creating the release the first time. To add an application, create a branch with its own PlatformIO project at the root, copy that workflow, and push. It must stay under 1.31 MB and contain no credentials.
 
-This branch has no workflow, on purpose: the launcher binary contains your Wi-Fi credentials and must never be published.
+This branch has no workflow: the launcher is flashed over USB together with its bootloader and partition table, as below.
 
 Because the release tags share the branch names, plain names like `wifi_checker` are ambiguous in some Git commands, where the tag wins. Use `refs/heads/wifi_checker` in scripts, or set `git config remote.origin.tagOpt --no-tags` in your clone.
 
@@ -62,7 +64,7 @@ Because the release tags share the branch names, plain names like `wifi_checker`
 
 Install the PlatformIO IDE extension or PlatformIO Core. The first build installs the ESP32 platform and ESP-IDF toolchain. The project path must be short: builds fail on Windows when source paths pass 260 characters.
 
-The launcher needs Wi-Fi credentials, plus the BirdNET server for `birdnet_viewer`. Create `%USERPROFILE%\.cyd_private\wifi_credentials.h` from `main\wifi_credentials.example.h`. Never commit that file.
+The first build also downloads the `espressif/qrcode` component (pinned in `main/idf_component.yml` and `dependencies.lock`) into `managed_components/`.
 
 ```powershell
 $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"

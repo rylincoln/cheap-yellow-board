@@ -23,7 +23,8 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "wifi_credentials.h"
+#include "phone_setup.h"
+#include "qrcode.h"
 
 /* Each branch of this repository is one application. GitHub Actions on the
    branch publishes its build as IMAGE_ASSET_NAME on a release tagged with
@@ -90,6 +91,11 @@
 #define NETWORK_TITLE_COLUMNS 8
 #define SCAN_BUTTON_COLUMN (NETWORK_TITLE_COLUMNS + 1)
 #define BACK_BUTTON_COLUMNS (SCROLL_UP_COLUMN - 1)
+/* The chooser lists networks above a note about phone setup, which takes
+   the menu's last two rows. */
+#define NETWORK_ROWS (MENU_ROWS - 2)
+#define PHONE_NOTE_ROW (MENU_FIRST_ROW + NETWORK_ROWS)
+#define PHONE_BUTTON_ROW (PHONE_NOTE_ROW + 1)
 
 #define WIFI_CONNECTED_BIT BIT0
 
@@ -233,54 +239,7 @@ static void save_slot(int slot, const char *name, const char *version)
     nvs_close(nvs);
 }
 
-#ifndef BIRDNET_BASE_URL
-#define BIRDNET_BASE_URL ""
-#endif
-
-/* FNV-1a hash of this build's compiled-in settings. */
-static uint32_t compiled_config_hash(void)
-{
-    static const char *const values[] = {WIFI_SSID, WIFI_PASSWORD, BIRDNET_BASE_URL};
-    uint32_t hash = 2166136261u;
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
-        for (const char *c = values[i]; ; ++c) {
-            hash = (hash ^ (uint8_t)*c) * 16777619u;
-            if (*c == '\0') {
-                break;
-            }
-        }
-    }
-    return hash;
-}
-
-/* Seeds the boot images' settings (NVS cyd_config) from this launcher's
-   private header, but only when that header changed since it last did:
-   settings edited on the device, with the launcher's network chooser or
-   wifi_checker's CONNECT screen, survive restarts until a launcher with new
-   credentials is flashed. */
-static void seed_config(void)
-{
-    nvs_handle_t nvs;
-    if (nvs_open(CONFIG_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
-        ESP_LOGE(TAG, "Could not open NVS for settings");
-        return;
-    }
-    uint32_t hash = compiled_config_hash();
-    uint32_t seeded = 0;
-    if (nvs_get_u32(nvs, "seed", &seeded) != ESP_OK || seeded != hash) {
-        nvs_set_str(nvs, "wifi_ssid", WIFI_SSID);
-        nvs_set_str(nvs, "wifi_pass", WIFI_PASSWORD);
-        if (BIRDNET_BASE_URL[0] != '\0') {
-            nvs_set_str(nvs, "birdnet_url", BIRDNET_BASE_URL);
-        }
-        nvs_set_u32(nvs, "seed", hash);
-        nvs_commit(nvs);
-        ESP_LOGI(TAG, "Stored this launcher's settings for the boot images");
-    }
-    nvs_close(nvs);
-}
-
-/* Reads a setting the images share, falling back to this build's value. */
+/* Reads a setting the images share, or the fallback when it isn't set. */
 static void load_config_string(const char *key, const char *fallback, char *value,
                                size_t size)
 {
@@ -304,6 +263,40 @@ static bool store_wifi_network(const char *ssid, const char *password)
     }
     bool stored = nvs_set_str(nvs, "wifi_ssid", ssid) == ESP_OK &&
                   nvs_set_str(nvs, "wifi_pass", password) == ESP_OK && nvs_commit(nvs) == ESP_OK;
+    nvs_close(nvs);
+    return stored;
+}
+
+/* True once a network has been saved, on the device or from a phone. */
+static bool wifi_network_saved(void)
+{
+    char ssid[33];
+    load_config_string("wifi_ssid", "", ssid, sizeof(ssid));
+    return ssid[0] != '\0';
+}
+
+/* Stores what the phone setup page submitted, for the launcher and every
+   image. The page never shows the saved password, so a blank one keeps it
+   when the network stays the same. A blank server goes back to the viewer's
+   default. Runs on the web server's task. */
+static bool save_phone_settings(const char *ssid, const char *password, const char *birdnet_url)
+{
+    char saved_ssid[33];
+    char saved_password[65];
+    load_config_string("wifi_ssid", "", saved_ssid, sizeof(saved_ssid));
+    if (password[0] == '\0' && strcmp(ssid, saved_ssid) == 0) {
+        load_config_string("wifi_pass", "", saved_password, sizeof(saved_password));
+        password = saved_password;
+    }
+    nvs_handle_t nvs;
+    if (!store_wifi_network(ssid, password) ||
+        nvs_open(CONFIG_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
+        return false;
+    }
+    esp_err_t result = birdnet_url[0] != '\0' ? nvs_set_str(nvs, "birdnet_url", birdnet_url)
+                                              : nvs_erase_key(nvs, "birdnet_url");
+    bool stored = (result == ESP_OK || result == ESP_ERR_NVS_NOT_FOUND) &&
+                  nvs_commit(nvs) == ESP_OK;
     nvs_close(nvs);
     return stored;
 }
@@ -541,12 +534,12 @@ static int scroll_tap_direction(int column)
     return 0;
 }
 
-/* The offset of the first visible row one page up or down a list,
-   stopping with the last page full. */
-static int scrolled_offset(int offset, int count, int direction)
+/* The offset of the first visible row one page up or down a list showing
+   rows at a time, stopping with the last page full. */
+static int scrolled_offset(int offset, int count, int rows, int direction)
 {
-    int max_offset = count - MENU_ROWS;
-    offset += direction * MENU_ROWS;
+    int max_offset = count - rows;
+    offset += direction * rows;
     if (offset > max_offset) {
         offset = max_offset;
     }
@@ -658,7 +651,7 @@ static void draw_entries(void)
 /* Pages the menu by its visible height. */
 static void scroll_menu(int direction)
 {
-    int offset = scrolled_offset(scroll_offset, entry_count, direction);
+    int offset = scrolled_offset(scroll_offset, entry_count, MENU_ROWS, direction);
     if (offset != scroll_offset) {
         scroll_offset = offset;
         draw_entries();
@@ -847,27 +840,19 @@ static bool wifi_try(const char *ssid, const char *password)
     return esp_wifi_connect() == ESP_OK && wifi_wait_connected();
 }
 
-/* Joins the shared network, which may have been chosen on the device. On
+/* Joins the saved network, chosen on the device or from a phone. On
    failure Wi-Fi stays started but idle, for the chooser's scans. */
 static bool wifi_join(void)
 {
     char ssid[33];
     char password[65];
-    load_config_string("wifi_ssid", WIFI_SSID, ssid, sizeof(ssid));
-    load_config_string("wifi_pass", WIFI_PASSWORD, password, sizeof(password));
-    bool connected = wifi_try(ssid, password);
-    /* A mistyped or vanished network chosen on the device must not cut the
-       launcher off from GitHub, so fall back to this build's own credentials.
-       The images join only the saved network and have no fallback, so when
-       this one works, save it in place of the one that did not. */
-    if (!connected && (strcmp(ssid, WIFI_SSID) != 0 || strcmp(password, WIFI_PASSWORD) != 0)) {
-        ESP_LOGW(TAG, "Saved Wi-Fi network %s did not connect; trying %s", ssid, WIFI_SSID);
-        connected = wifi_try(WIFI_SSID, WIFI_PASSWORD);
-        if (connected && store_wifi_network(WIFI_SSID, WIFI_PASSWORD)) {
-            ESP_LOGW(TAG, "Saved Wi-Fi network %s in place of %s for the boot images", WIFI_SSID,
-                     ssid);
-        }
+    load_config_string("wifi_ssid", "", ssid, sizeof(ssid));
+    load_config_string("wifi_pass", "", password, sizeof(password));
+    if (ssid[0] == '\0') {
+        set_activity("no Wi-Fi saved");
+        return false;
     }
+    bool connected = wifi_try(ssid, password);
     if (!connected) {
         wifi_give_up = true;
         esp_wifi_disconnect();
@@ -1459,13 +1444,15 @@ static void draw_network(const network_list_t *list, int index, bool highlighted
 static void draw_network_list(const network_list_t *list)
 {
     draw_network_title(list);
-    for (int i = 0; i < MENU_ROWS; ++i) {
+    for (int i = 0; i < NETWORK_ROWS; ++i) {
         if (list->offset + i < list->count) {
             draw_network(list, list->offset + i, false);
         } else {
             draw_menu_row(MENU_FIRST_ROW + i, CYD_COLOR_WHITE, CYD_COLOR_BLACK, "");
         }
     }
+    draw_menu_row(PHONE_NOTE_ROW, CYD_COLOR_GRAY, CYD_COLOR_BLACK, "PREFER PHONE?");
+    draw_menu_row(PHONE_BUTTON_ROW, CYD_COLOR_YELLOW, CYD_COLOR_BUTTON, "PHONE SETUP");
     char text[MENU_COLUMNS + 1];
     uint16_t foreground[MENU_COLUMNS];
     uint16_t background[MENU_COLUMNS];
@@ -1477,7 +1464,7 @@ static void draw_network_list(const network_list_t *list)
     }
     button_cells(&back_button, text, foreground, background);
     scroll_button_cells(text, foreground, background, list->offset > 0,
-                        list->offset + MENU_ROWS < list->count);
+                        list->offset + NETWORK_ROWS < list->count);
     draw_menu_cells(SCROLL_ROW, text, foreground, background);
     draw_info();
 }
@@ -1711,9 +1698,9 @@ static bool edit_wifi_settings(const char *ssid)
     editor_t editor = {.active = ssid[0] != '\0' ? FIELD_PASSWORD : FIELD_SSID};
     snprintf(editor.text[FIELD_SSID], field_capacity(FIELD_SSID) + 1, "%s", ssid);
     char saved_ssid[33];
-    load_config_string("wifi_ssid", WIFI_SSID, saved_ssid, sizeof(saved_ssid));
+    load_config_string("wifi_ssid", "", saved_ssid, sizeof(saved_ssid));
     if (strcmp(ssid, saved_ssid) == 0) {
-        load_config_string("wifi_pass", WIFI_PASSWORD, editor.text[FIELD_PASSWORD],
+        load_config_string("wifi_pass", "", editor.text[FIELD_PASSWORD],
                            field_capacity(FIELD_PASSWORD) + 1);
     }
     draw_editor(&editor);
@@ -1795,6 +1782,153 @@ static bool open_network(const wifi_ap_record_t *ap)
            edit_wifi_settings((const char *)ap->ssid);
 }
 
+/* ---- Phone setup ---- */
+
+static const button_t phone_buttons[] = {
+    {0, 7, "BACK", CYD_COLOR_WHITE},
+    {8, 9, "QR CODE", CYD_COLOR_YELLOW},
+};
+#define PHONE_BACK_BUTTON 0
+#define PHONE_QR_BUTTON 1
+#define PHONE_STATUS_ROW (CYD_TEXT_ROWS - 2)
+#define QR_QUIET_MODULES 2 /* the light margin scanners need, in modules */
+
+static void draw_phone_status(int phones)
+{
+    ESP_ERROR_CHECK(cyd_text_row(PHONE_STATUS_ROW, phones > 0 ? CYD_COLOR_CYAN : CYD_COLOR_GRAY,
+                                 CYD_COLOR_BLACK,
+                                 phones > 0 ? "phone joined" : "waiting for phone"));
+}
+
+/* How to reach the page that phone_setup serves. */
+static void draw_phone_page(int phones)
+{
+    page_t page = {0};
+    page_add(&page, CYD_COLOR_YELLOW, "PHONE SETUP");
+    page_add(&page, CYD_COLOR_WHITE, "On your phone,");
+    page_add(&page, CYD_COLOR_WHITE, "join Wi-Fi");
+    page_add(&page, CYD_COLOR_YELLOW, "%s", phone_setup_network_name());
+    page_add(&page, CYD_COLOR_WHITE, "and a setup page");
+    page_add(&page, CYD_COLOR_WHITE, "opens. If not,");
+    page_add(&page, CYD_COLOR_WHITE, "browse to");
+    page_add(&page, CYD_COLOR_YELLOW, "%s", phone_setup_address());
+    page_show(&page);
+    draw_phone_status(phones);
+    draw_buttons(CYD_TEXT_ROWS - 1, phone_buttons, 2);
+}
+
+/* Draws the code as large as fits above the bottom text row: dark modules
+   on a light square. Called back by esp_qrcode_generate. */
+static void draw_qr_modules(esp_qrcode_handle_t qrcode)
+{
+    int size = esp_qrcode_get_size(qrcode);
+    int span = size + 2 * QR_QUIET_MODULES;
+    int area_height = CYD_LCD_HEIGHT - CYD_FONT_HEIGHT;
+    int scale = area_height / span;
+    if (CYD_LCD_WIDTH / span < scale) {
+        scale = CYD_LCD_WIDTH / span;
+    }
+    int left = (CYD_LCD_WIDTH - span * scale) / 2;
+    int top = (area_height - span * scale) / 2;
+    ESP_ERROR_CHECK(cyd_fill_rect(left, top, span * scale, span * scale, CYD_COLOR_WHITE));
+    for (int y = 0; y < size; ++y) {
+        int x = 0;
+        while (x < size) {
+            if (!esp_qrcode_get_module(qrcode, x, y)) {
+                ++x;
+                continue;
+            }
+            int run = 1;
+            while (x + run < size && esp_qrcode_get_module(qrcode, x + run, y)) {
+                ++run;
+            }
+            ESP_ERROR_CHECK(cyd_fill_rect(left + (QR_QUIET_MODULES + x) * scale,
+                                          top + (QR_QUIET_MODULES + y) * scale, run * scale,
+                                          scale, CYD_COLOR_BLACK));
+            x += run;
+        }
+    }
+}
+
+/* A QR code that joins a phone to the setup network. */
+static void draw_phone_qr(void)
+{
+    char text[64];
+    snprintf(text, sizeof(text), "WIFI:T:nopass;S:%s;;", phone_setup_network_name());
+    ESP_ERROR_CHECK(cyd_fill_rect(0, 0, CYD_LCD_WIDTH, CYD_LCD_HEIGHT, CYD_COLOR_BLACK));
+    esp_qrcode_config_t config = ESP_QRCODE_CONFIG_DEFAULT();
+    config.display_func = draw_qr_modules;
+    config.max_qrcode_version = 4;
+    bool drawn = esp_qrcode_generate(&config, text) == ESP_OK;
+    ESP_ERROR_CHECK(cyd_text_row(CYD_TEXT_ROWS - 1, CYD_COLOR_GRAY, CYD_COLOR_BLACK,
+                                 drawn ? "tap to go back" : "QR code error"));
+}
+
+/* Runs phone setup until BACK, or until a phone saves a network. Returns
+   true when one was saved; the network task is then joining it. */
+static bool phone_setup_screen(const network_list_t *list)
+{
+    char ssid[33];
+    char birdnet_url[128];
+    load_config_string("wifi_ssid", "", ssid, sizeof(ssid));
+    load_config_string("birdnet_url", "", birdnet_url, sizeof(birdnet_url));
+    const phone_setup_config_t config = {
+        .networks = list->networks,
+        .network_count = list->count,
+        .ssid = ssid,
+        .birdnet_url = birdnet_url,
+        .save = save_phone_settings,
+    };
+    esp_err_t result = phone_setup_start(&config);
+    if (result != ESP_OK) {
+        show_message_and_wait("PHONE SETUP", "could not start", esp_err_to_name(result));
+        return false;
+    }
+    int phones = phone_setup_phone_count();
+    bool showing_qr = false;
+    draw_phone_page(phones);
+    xQueueReset(touch_queue);
+    while (!phone_setup_saved()) {
+        cyd_touch_point_t point;
+        if (xQueueReceive(touch_queue, &point, pdMS_TO_TICKS(100)) == pdTRUE) {
+            int row = point.y / CYD_FONT_HEIGHT;
+            int column = point.x / CYD_FONT_WIDTH;
+            if (showing_qr) {
+                showing_qr = false;
+                draw_phone_page(phones);
+            } else if (row == CYD_TEXT_ROWS - 1 &&
+                       button_hit(&phone_buttons[PHONE_BACK_BUTTON], column)) {
+                phone_setup_stop();
+                return false;
+            } else if (row == CYD_TEXT_ROWS - 1 &&
+                       button_hit(&phone_buttons[PHONE_QR_BUTTON], column)) {
+                showing_qr = true;
+                draw_phone_qr();
+            }
+        }
+        int joined = phone_setup_phone_count();
+        if (joined != phones) {
+            phones = joined;
+            if (!showing_qr) {
+                draw_phone_status(phones);
+            }
+        }
+    }
+
+    load_config_string("wifi_ssid", "", ssid, sizeof(ssid));
+    page_t page = {0};
+    page_add(&page, CYD_COLOR_YELLOW, "SAVED BY PHONE");
+    page_add(&page, CYD_COLOR_WHITE, "joining");
+    page_add_wrapped(&page, CYD_COLOR_WHITE, ssid, 2);
+    page_show(&page);
+    ESP_ERROR_CHECK(cyd_text_row(CYD_TEXT_ROWS - 1, CYD_COLOR_WHITE, CYD_COLOR_BLACK, ""));
+    /* Let the page's answer reach the phone before its network goes away. */
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    phone_setup_stop();
+    rejoin_wifi();
+    return true;
+}
+
 /* Lists the networks in range until BACK, or until one is chosen and saved
    with its password. Returns true when one was saved; the network task is
    then joining it. */
@@ -1837,7 +1971,7 @@ static bool choose_wifi_network(void)
                     list.status = net_state == NET_CONNECTING ? "JOINING" : "SCANNING";
                     draw_network_title(&list);
                 }
-            } else if (row >= MENU_FIRST_ROW && row < MENU_FIRST_ROW + MENU_ROWS &&
+            } else if (row >= MENU_FIRST_ROW && row < MENU_FIRST_ROW + NETWORK_ROWS &&
                        index < list.count) {
                 draw_network(&list, index, true);
                 vTaskDelay(pdMS_TO_TICKS(120));
@@ -1846,11 +1980,18 @@ static bool choose_wifi_network(void)
                     break;
                 }
                 draw_network_list(&list);
+            } else if (row == PHONE_NOTE_ROW || row == PHONE_BUTTON_ROW) {
+                if (phone_setup_screen(&list)) {
+                    saved = true;
+                    break;
+                }
+                draw_network_list(&list);
             } else if (row == SCROLL_ROW) {
                 if (button_hit(&back_button, column)) {
                     break;
                 }
-                int offset = scrolled_offset(list.offset, list.count, scroll_tap_direction(column));
+                int offset = scrolled_offset(list.offset, list.count, NETWORK_ROWS,
+                                             scroll_tap_direction(column));
                 if (offset != list.offset) {
                     list.offset = offset;
                     draw_network_list(&list);
@@ -1900,7 +2041,6 @@ void app_main(void)
         nvs_result = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_result);
-    seed_config();
     load_slots();
     ESP_ERROR_CHECK(cyd_touch_start(&touch_queue));
 
@@ -1912,6 +2052,15 @@ void app_main(void)
                             pdPASS
                         ? ESP_OK
                         : ESP_ERR_NO_MEM);
+
+    /* The first start, or after the settings were erased: there is no
+       network to join yet, so open the chooser, with its phone setup, before
+       counting down. */
+    if (!wifi_network_saved()) {
+        choose_wifi_network();
+        build_entries();
+        draw_menu(title_text);
+    }
 
     int64_t deadline = esp_timer_get_time() + MENU_TIMEOUT_US;
     int shown_seconds = -1;
