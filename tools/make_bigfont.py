@@ -13,7 +13,7 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "ho
 
 SIZES = {  # name: (480 board, 320 board), the em in pixels
     "label": (20, 14),
-    "strip": (48, 32),
+    "strip": (48, 28),
     "tile": (72, 48),
     "outside": (120, 80),
 }

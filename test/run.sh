@@ -14,4 +14,7 @@ build/host-tests/readings
 cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_bigfont.c apps/home_dashboard/main/bigfont.c apps/home_dashboard/main/bigfont_data.c -o build/host-tests/bigfont
 build/host-tests/bigfont
 
+cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_glance_layout.c apps/home_dashboard/main/glance_layout.c apps/home_dashboard/main/readings.c apps/home_dashboard/main/bigfont.c apps/home_dashboard/main/bigfont_data.c -lm -o build/host-tests/glance_layout
+build/host-tests/glance_layout
+
 echo "host tests passed"
