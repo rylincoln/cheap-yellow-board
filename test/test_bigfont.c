@@ -4,6 +4,10 @@
 
 #define W 200
 #define H 160
+#define WN 60 /* narrow window width */
+#define OFF 100 /* reference margin, columns */
+#define RO 100 /* reference margin, rows */
+#define WR (WN + 2 * OFF)
 
 static const bigfont_t *const all[8] = {
     &bigfont_label_480, &bigfont_strip_480, &bigfont_tile_480, &bigfont_outside_480,
@@ -59,26 +63,51 @@ int main(void)
         CHECK(ch(buf[i], 1) <= 32 && ch(buf[i], 2) <= 16);
     }
 
-    /* strips equal a whole render */
+    /* ink rows of the tile '8' */
+    int yo = 0, gh = 0;
+    for (int i = 0; i < f->glyph_count; i++)
+        if (f->glyphs[i].code == '8') { yo = f->glyphs[i].y_offset; gh = f->glyphs[i].height; }
+    CHECK(gh > 20 && yo + gh <= lh);
+
+    /* strips split through the middle of the ink equal a whole render */
+    int mid = yo + gh / 2;
     for (int i = 0; i < W * H; i++) a[i] = b[i] = 0x0000;
     bigfont_render(f, "8.5", 7, 0, 0xFFFF, a, W, 0, lh);
-    bigfont_render(f, "8.5", 7, 0, 0xFFFF, b, W, 0, 10);
-    bigfont_render(f, "8.5", 7, 0, 0xFFFF, b + W * 10, W, 10, lh - 10);
+    bigfont_render(f, "8.5", 7, 0, 0xFFFF, b, W, 0, mid);
+    bigfont_render(f, "8.5", 7, 0, 0xFFFF, b + W * mid, W, mid, lh - mid);
     CHECK(memcmp(a, b, sizeof(uint16_t) * W * lh) == 0);
+    int inked = 0;
+    for (int i = 0; i < W * mid; i++) inked += b[i] != 0;
+    CHECK(inked > 0); /* the first strip really holds ink */
 
-    /* clipping: sentinels untouched */
-    static uint16_t g[1 + W * 80 + 1];
-    int xs[2] = {-10, W - 5};
-    for (int k = 0; k < 2; k++) {
-        for (unsigned i = 0; i < sizeof(g) / sizeof(g[0]); i++) g[i] = 0x1234;
-        bigfont_render(f, "88", xs[k], 0, 0xFFFF, g + 1, W, 0, 80);
-        CHECK(g[0] == 0x1234);
-        CHECK(g[1 + W * 80] == 0x1234);
+    /* windows that clip at every edge match a roomy reference render */
+    static const int xs[] = {-10, 0, 20, WN - 5, WN - 30, WN};
+    int lys[3] = {-yo, -yo - 10, -yo + 5};
+    int rowsv[3] = {gh, gh, gh - 8};
+    for (int li = 0; li < 3; li++) {
+        for (unsigned xi = 0; xi < sizeof(xs) / sizeof(xs[0]); xi++) {
+            int x = xs[xi], rows = rowsv[li];
+            static uint16_t narrow[1 + WN * 80 + 1], ref[WR * (80 + 2 * RO)];
+            for (unsigned i = 0; i < sizeof(narrow) / sizeof(narrow[0]); i++) narrow[i] = 0x1234;
+            for (unsigned i = 0; i < sizeof(ref) / sizeof(ref[0]); i++) ref[i] = 0x1234;
+            bigfont_render(f, "88", x, lys[li], 0xFFFF, narrow + 1, WN, 0, rows);
+            bigfont_render(f, "88", x + OFF, lys[li], 0xFFFF, ref, WR, -RO, rows + 2 * RO);
+            CHECK(narrow[0] == 0x1234);
+            CHECK(narrow[1 + WN * rows] == 0x1234);
+            int diff = 0;
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < WN; c++)
+                    diff += narrow[1 + r * WN + c] != ref[(r + RO) * WR + c + OFF];
+            CHECK(diff == 0);
+            if (li == 0 && x == 20) { /* ink reaches the first and last rows */
+                int top = 0, bottom = 0;
+                for (int c = 0; c < WN; c++) {
+                    top += narrow[1 + c] != 0x1234;
+                    bottom += narrow[1 + (rows - 1) * WN + c] != 0x1234;
+                }
+                CHECK(top > 0 && bottom > 0);
+            }
+        }
     }
-    /* vertical clipping with negative line_y and rows beyond */
-    for (unsigned i = 0; i < sizeof(g) / sizeof(g[0]); i++) g[i] = 0x1234;
-    bigfont_render(f, "88", 3, -20, 0xFFFF, g + 1, W, 0, 80);
-    bigfont_render(f, "88", 3, 60, 0xFFFF, g + 1, W, 0, 80);
-    CHECK(g[0] == 0x1234 && g[1 + W * 80] == 0x1234);
     CHECK_DONE();
 }
