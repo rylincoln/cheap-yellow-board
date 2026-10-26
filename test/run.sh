@@ -20,4 +20,10 @@ build/host-tests/glance_layout
 cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main -Icomponents/json_scan/include test/test_wildlife.c apps/home_dashboard/main/wildlife.c components/json_scan/json_scan.c -o build/host-tests/wildlife
 build/host-tests/wildlife
 
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update test/test_push_auth.c components/cyd_update/push_auth.c -o build/host-tests/push_auth
+build/host-tests/push_auth
+
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update test/test_image_desc.c components/cyd_update/image_desc.c -o build/host-tests/image_desc
+build/host-tests/image_desc
+
 echo "host tests passed"
