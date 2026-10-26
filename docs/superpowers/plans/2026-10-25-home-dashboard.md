@@ -30,9 +30,9 @@
   - No LVGL and no cJSON. JSON and text are scanned by hand, as the viewer does.
   - Static buffers are sized with `CYD_LCD_MAX_WIDTH`, `CYD_TEXT_MAX_COLUMNS` and similar. Nothing display-sized uses the 480 or 320 literal.
   - No frame buffer. Draw in strips of at most `CYD_LCD_MAX_WIDTH * 16` pixels.
-- **Host-only modules:** the pure modules (`form_check.c`, `readings.c`, `bigfont.c`, `bigfont_data.c`, `glance_layout.c`) include only the C standard library, so `test/run.sh` can build them with the host `cc`.
+- **Host-only modules:** the pure modules (`form_check.c`, `readings.c`, `bigfont.c`, `bigfont_data.c`, `glance_layout.c`, and from Task 8 `json_scan.c` and `wildlife.c`) include only the C standard library, so `test/run.sh` can build them with the host `cc`.
 - **Project names:** `project()` equals the folder name.
-- **Settings keys:** `cyd_config` keys are `ha_url`, `ha_token`, `ha_upstairs`, `ha_downstairs`, `ha_outside` and `ha_battery`.
+- **Settings keys:** `cyd_config` keys are `ha_url`, `ha_token`, `ha_upstairs`, `ha_downstairs`, `ha_outside` and `ha_battery`, and (from Task 8) `wildlife_url`, which replaces `birdnet_url`.
 - **Field limits:**
 
   | Field | Maximum characters |
@@ -554,13 +554,163 @@ void glance_compose(int width, int height, const reading_t readings[SENSOR_COUNT
   - **BirdNET unreachable:** temporarily set an unreachable BirdNET address on the phone page. `BIRDNET ERROR` shows for 5 s, then the glance screen returns. Restore the address afterwards.
 - [ ] **Step 6: Commit.** "Show Home Assistant readings, with the latest bird on a tap"
 
-### Task 8: Documentation and release
+### Task 8: Birds from wildlife-cam
+
+Added on 2026-10-25 after the board check: the user doesn't run BirdNET-Go, so birds come from their wildlife-cam gallery's `GET /frame/wildlife` instead (spec, Birds). The brief for this task is self-contained; don't read other tasks.
+
+**Files:**
+- Create:
+  - `apps/home_dashboard/main/json_scan.h`, `json_scan.c`: the viewer's hand-written JSON helpers, moved out of `main.c` unchanged, except for the string decoding below. Pure C: libc only.
+  - `apps/home_dashboard/main/wildlife.h`, `wildlife.c`: reading a `/frame/wildlife` reply. Pure C: libc and `json_scan.h` only.
+  - `test/test_wildlife.c`.
+- Modify:
+  - `apps/home_dashboard/main/main.c`;
+  - `apps/home_dashboard/main/CMakeLists.txt` (`SRCS`);
+  - `test/run.sh`: add the new test, with compile and run on separate lines (ruling R6);
+  - `launcher/main/phone_setup.h`, `launcher/main/phone_setup.c`, `launcher/main/main.c`: the server field becomes the wildlife camera server.
+
+**The reply, as served** (the sample has 12 birds; trimmed here):
+
+```json
+{"birds": [
+  {"audio_url": "/audio/13621", "confidence": "46%", "label": "Common Raven", "photo_url": "/species_photo/comrav", "time": "5:21 PM"},
+  {"audio_url": "/audio/13617", "confidence": "75%", "label": "Steller's Jay", "photo_url": "/species_photo/stejay", "time": "4:42 PM"}
+ ],
+ "sighting": {"camera": "water tower", "confidence": "74%", "image_url": "/image/13437", "label": "Mule deer", "thumb_url": "/thumb/13437", "time": "Oct 23, 10:52 PM", "ts": "2026-10-23T22:52:40.118551"},
+ "sightings": [ … ]}
+```
+
+- `birds` is newest first, up to 12, one per species. `time` is preformatted: `5:21 PM` for today, `Oct 23, 10:52 PM` for an earlier day. `photo_url` may be `null`.
+- The species photos sampled were baseline JPEGs, 330x220 to 330x499, 17–51 KB. A photo URL can also 404.
+- Flask escapes non-ASCII as `\uXXXX`, but don't rely on it: raw UTF-8 must work too.
+
+**Interfaces:**
+- Consumes, from `main.c` as it stands: `http_get`, `http_response_free`, `report_failure`, `set_server_status`, `show_progress`, `set_stage`, `draw_jpeg`, `wrap_name`, `draw_lines`, `show_message`, `enter_timed_screen`, `enter_glance`, the `SCREEN_*` states, `server_status` under `status_lock`, and `strip_trailing_slashes`.
+- Produces:
+  - `json_scan.h`: `json_cursor_t`, `json_value_t` and the helpers `main.c` defines today: `json_skip_whitespace`, `json_parse_string`, `json_skip_value`, `json_object_field`, `json_value_string`, `json_value_number` and `json_object_string`, made non-static with the same names and behaviour.
+  - `wildlife.h`:
+
+    ```c
+    #define WILDLIFE_MAX_BIRDS 12
+    typedef struct {
+        char label[48];
+        char time[24];
+        char confidence[8];
+        char photo_url[96];
+    } wildlife_bird_t;
+    int wildlife_parse_birds(const char *json, size_t length, wildlife_bird_t *birds, int max);
+    bool wildlife_join_url(const char *base_url, const char *path, char *out, size_t size);
+    void wildlife_heard_row(const wildlife_bird_t *bird, int columns, char *out, size_t size);
+    ```
+
+**Rules:**
+- **`wildlife_parse_birds`** returns the number of birds stored, from 0 to `max`, or -1 if the reply isn't a JSON object whose `birds` member is an array, or the array is cut off or malformed.
+  - Any other top-level member is skipped whole, with `json_skip_value`: `sighting`, `sightings`, and anything added later.
+  - Inside each bird, unknown members such as `audio_url` are skipped.
+  - A bird whose `label` is missing, not a string, empty, or longer than 47 characters after decoding is left out. It doesn't count, and parsing goes on.
+  - `time` or `confidence` that is missing, `null`, not a string or too long becomes an empty string, and the bird is kept.
+  - `photo_url` that is missing, `null`, not a string, too long, or doesn't start with `/` becomes empty, meaning no photo.
+  - It stops after `max` birds.
+- **ASCII stand-ins in `json_parse_string`**, for every caller:
+  - Decode `\uXXXX` escapes (a surrogate pair is one character) and raw UTF-8 sequences to code points.
+  - U+2018, U+2019 and U+02BC become `'`; U+201C and U+201D become `"`; U+2013 and U+2014 become `-`; U+00A0 becomes a space.
+  - Any other code point above 0x7E becomes a single `?`, and so does a malformed UTF-8 sequence.
+  - The result is plain printable ASCII, which `cyd_text_row` can draw.
+- **`wildlife_join_url`** writes `base_url` followed by `path` into `out`. It returns false, with `out` empty, if `path` doesn't start with `/` or the result doesn't fit.
+- **`wildlife_heard_row`** writes the bird's label, then a space and its time if the whole still fits in `columns` characters. Otherwise it writes the label alone, cut to `columns`. An empty time gives the label alone.
+- **Settings:**
+  - `cyd_config` key `wildlife_url`, at most 127 characters. `load_config` reads it into a 128-byte buffer and strips trailing `/`. There is no default.
+  - `birdnet_url`, `DEFAULT_BIRDNET_BASE_URL`, `GBIF_MATCH_URL` and `MIN_BIRD_CONFIDENCE` go.
+- **Launcher phone page:**
+  - The `BirdNET server` field becomes `Wildlife camera server`, with form name `wildlife_url`, and `phone_settings_t.birdnet_url` becomes `wildlife_url`.
+  - It is still checked with `form_url_valid`. Its error reads `The wildlife camera server must be an http:// address.`
+  - The launcher's `save_phone_settings` stores or erases `wildlife_url` as it did `birdnet_url`, and erases any old `birdnet_url` key. `load_config_string` reads `wildlife_url` back for the page.
+  - Update the comment on `URL_MAX`, which names `birdnet_viewer`.
+- **Removed from `main.c`:**
+  - `bird_detection_t`, `bird_info_t` and `displayed_bird`;
+  - `fetch_latest_bird`, `url_encode_path` and `fetch_bird_image`;
+  - `get_json`, `json_top_number`, `json_top_string`, `fetch_family`, `fetch_weather` and `fetch_species_totals`;
+  - `rounded`, if nothing else uses it;
+  - the JSON helpers, which move to `json_scan.c`.
+  - `TAG` becomes `"home_dashboard"`.
+- **Photo stream:**
+  - The second half of today's `fetch_bird_image` becomes `static esp_err_t open_image_stream(const char *url, esp_http_client_handle_t *client, size_t *length)`. It opens the URL, fetches headers, and requires HTTP 200 with a length from 1 to `IMAGE_JPEG_CAPACITY`.
+  - It attaches the certificate bundle only for `https://`. Its log lines stop saying Wikimedia.
+- **`draw_jpeg` keeps the aspect ratio.**
+  - It fits the decoded image inside the screen, centred, on the black it clears to, instead of stretching it to fill.
+  - Pick the decode scale as today: the smallest 1/2^n at which the decoded image is still at least as large as its fitted size in both directions.
+  - A 330x220 photo still fills a 480x320 screen. A 330x499 one is 212x320, centred.
+- **The tap on GLANCE:**
+  - Draw rows 4 and 5 as `finding the` / `latest bird` straight away.
+  - If there is no Wi-Fi, show a MESSAGE `NO WI-FI`. If `wildlife_url` is empty, show a MESSAGE `NO WILDLIFE CAM` / `use phone setup`.
+  - Otherwise GET `{wildlife_url}/frame/wildlife` with `http_get`, capacity 8 KB. Parse it into `static wildlife_bird_t birds[WILDLIFE_MAX_BIRDS]` and a count, kept for the details page.
+  - If the request fails or the reply can't be read, show a MESSAGE `WILDLIFE ERROR` / `server_status`. Set the reason through `report_failure` or `set_server_status`, as today; a parse failure says `bad reply`. An empty list shows a MESSAGE `NO BIRDS YET`.
+  - Then stream `birds[0]`'s photo, joined to `wildlife_url`. Success goes to PHOTO. No photo URL, or a failure to open, fetch or decode, logs the reason and goes straight to INFO with the details page.
+  - Progress stages: `getting birds`, `getting photo`, `drawing photo`.
+- **PHOTO → tap → INFO → tap → GLANCE.** Each has its 30 s timer back to GLANCE, as today. The details page is drawn at once and makes no requests.
+- **Details page rows:**
+  - 0–1: the label, wrapped with `wrap_name`, in yellow.
+  - 2: the time, in white.
+  - 3: `confidence <confidence>`, in white, or empty if there is none.
+  - 4: `also heard`, in gray, only if there is a second bird.
+  - 5–8: `wildlife_heard_row` for `birds[1]` to `birds[4]`, in white, with `CYD_TEXT_COLUMNS`.
+  - 9: `tap for readings`, in gray.
+- `info_on_screen` and the status flags behave as Task 7 left them. Keep the busy-tap dropping.
+
+- [ ] **Step 1: Write the failing test** `test/test_wildlife.c` with `test/check.h`, and add it to `run.sh`. Use only species names and made-up URLs, never anything household-specific. Cases:
+  - **A three-bird reply shaped like the sample.** Include a `sighting` object, a `sightings` array of objects, and `audio_url` members. Returns 3, with every field checked.
+  - **Stand-ins:**
+    - `"Steller’s Jay"` gives `Steller's Jay`.
+    - The same label in raw UTF-8 gives the same.
+    - `"🐦 Wren"` gives `? Wren`.
+    - `"Café Wren"` gives `Caf? Wren`.
+  - **Skipped birds:**
+    - A missing label, an empty one and a 48-character one are each left out, and the birds around them are kept.
+    - A 47-character label is kept.
+  - **Photo URL:**
+    - `null` gives an empty `photo_url`.
+    - `"http://x/y.jpg"` gives an empty one.
+    - A 95-character path is kept, and a 96-character one gives empty.
+  - **Missing fields:** `time` and `confidence` missing or `null` give empty strings, and the bird is kept.
+  - **The `max` limit:** five birds with `max` 2 returns 2.
+  - **Rejected replies:**
+    - `[]`, `{}`, `{"birds": {}}`, and a reply cut off inside the array each return -1.
+    - `{"birds": []}` returns 0.
+  - **`wildlife_join_url`:**
+    - `http://h:8080` plus `/species_photo/x` gives `http://h:8080/species_photo/x`.
+    - A path without a leading `/` returns false.
+    - A result one byte too long for `size` returns false, and one that fits exactly returns true.
+  - **`wildlife_heard_row`:**
+    - With 20 columns, `Common Raven` and `5:21 PM` gives `Common Raven 5:21 PM`.
+    - `Chihuahuan Raven` and `5:02 PM` gives `Chihuahuan Raven`.
+    - A 25-character label is cut to 20.
+    - An empty time gives the label alone.
+    - With 17 columns, `Common Raven` and `5:21 PM` gives `Common Raven`.
+- [ ] **Step 2: Run** `sh test/run.sh`. Expected: it fails, because `wildlife.c` doesn't exist yet.
+- [ ] **Step 3: Write `json_scan.c` and `wildlife.c`**, moving the helpers out of `main.c`. Run `sh test/run.sh`. Expected: pass.
+- [ ] **Step 4: Change `main.c` and the launcher** as above.
+- [ ] **Step 5: Build.**
+  - Run `sh test/run.sh`.
+  - Build `launcher` and `apps/home_dashboard` with `USERPROFILE="$HOME" ~/.platformio/penv/bin/pio run`.
+  - Expected: all pass with no new warnings. Report both `firmware.bin` sizes; the dashboard's must be at most 1,376,256.
+  - Run `git grep -n "birdnet_url\|BirdNET server" -- launcher apps`. Expected: no output.
+- [ ] **Step 6: Commit.** "Show the latest bird from wildlife-cam"
+- [ ] **Step 7: Board check, run by the controller with the user (ruling R3).**
+  - Write the launcher's `firmware.bin` to `0x10000`, and the dashboard's to `0x150000`.
+  - The user enters the gallery address on the phone page. The token and Wi-Fi password are left blank, so they're kept.
+  - **Tap the readings:** `finding the latest bird` shows, then the newest bird's photo, aspect kept.
+  - **Tap the photo:** the details show, with `also heard`.
+  - **Tap again:** the readings come back.
+  - **Timeouts:** the photo and the details each go back to the readings after 30 s.
+  - **Gallery unreachable:** stop wildlife-cam's gallery, or enter a wrong address. `WILDLIFE ERROR` shows for 5 s.
+
+### Task 9: Documentation and release
 
 **Files:**
 - Modify:
-  - `apps/home_dashboard/README.md`: rewrite it for the dashboard. Cover what it shows, the settings it reads and the phone page, birds on tap, and the standalone partition.
-  - `README.md` and `docs/INSTALL.md`: replace `birdnet_viewer` with `home_dashboard`. INSTALL section 5 gains the Home Assistant fields and where to create a token.
-  - `CLAUDE.md`, `.github/copilot-instructions.md` and `launcher/README.md`: wherever `birdnet_viewer` is named.
+  - `apps/home_dashboard/README.md`: rewrite it for the dashboard. Cover what it shows, the settings it reads and the phone page (including the admin-token requirement), birds on tap from wildlife-cam's `/frame/wildlife`, and the standalone partition.
+  - `README.md` and `docs/INSTALL.md`: replace `birdnet_viewer` with `home_dashboard`. INSTALL section 5 gains the Home Assistant fields and the wildlife camera server, where to create a token, and that the token must belong to an admin user, because `POST /api/template` is admin-only and a non-admin token gets `HA 401 bad token` (ruling R7). Replace every mention of the BirdNET server setting (`birdnet_url`) with `wildlife_url`.
+  - `CLAUDE.md`, `.github/copilot-instructions.md` and `launcher/README.md`: wherever `birdnet_viewer` is named. `CLAUDE.md`'s settings bullet and `launcher/README.md`'s settings table also swap `birdnet_url` for `wildlife_url`.
   - `launcher/main/main.c`: comments that name `birdnet_viewer`.
 
 - [ ] **Step 1: Edit.** Then run `grep -rn "birdnet_viewer" --exclude-dir=.git --exclude-dir=superpowers .`. Expected: no output.

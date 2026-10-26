@@ -1,12 +1,12 @@
 # Home dashboard: design
 
-A boot image, `apps/home_dashboard`, that replaces `apps/birdnet_viewer` **(user)** and turns the board into a glance display for the house: three temperatures and the Shop battery current from Home Assistant, with the latest bird from BirdNET one tap away. It becomes the board's only app **(user)**: the other eight are removed.
+A boot image, `apps/home_dashboard`, that replaces `apps/birdnet_viewer` **(user)** and turns the board into a glance display for the house: three temperatures and the Shop battery current from Home Assistant, with the latest bird heard one tap away (from the user's wildlife-cam gallery since 2026-10-25; originally BirdNET). It becomes the board's only app **(user)**: the other eight are removed.
 
 Decisions the user made are marked **(user)**. Everything else is the designer's call and can be revisited.
 
 ## Why
 
-Interesting data already exists on the local network: Home Assistant at `http://192.168.1.33:8123/` and a BirdNET server on the Mac mini. Walking past the board, the user wants to read the temperatures inside and out and see how the Shop battery is doing without opening a phone. Birds stay available as a tap, since the board already knows how to show them.
+Interesting data already exists on the local network: Home Assistant at `http://192.168.1.33:8123/` and wildlife-cam, which identifies birds by song and serves them on the LAN (the spec first named a BirdNET-Go server, which the user turned out not to run). Walking past the board, the user wants to read the temperatures inside and out and see how the Shop battery is doing without opening a phone. Birds stay available as a tap, since the board already knows how to show them.
 
 ## What the user sees
 
@@ -66,18 +66,31 @@ The strip has to fit `▼153 A`. The builder may drop the strip's words to the g
 - The Ambient sensors report about once a minute and the Victron shunt every few seconds, so one 5-minute limit suits all four.
 - An entity whose state is `unavailable` or `unknown` shows `--` in gray.
 
-### Birds **(user confirmed)**
+### Birds **(user confirmed; source changed on 2026-10-25, see below)**
 
 The sequence is: glance screen → tap → bird photo → tap → bird details → tap → glance screen.
 
 - With no tap for 30 seconds, the photo or the details go back to the glance screen.
-- The photo and details look and behave exactly as in today's `apps/birdnet_viewer`:
-  - the latest visit today with confidence of at least 0.80;
-  - a full-screen streamed Wikimedia photo;
-  - the details page with the name, family, times, call count, weather and species totals.
-- BirdNET is only queried on a tap. It is not polled in the background (designer's call).
-- A tap must visibly respond within a fraction of a second, because the photo can take several seconds to stream. For example, clear the screen and show a one-line `finding today's bird` (designer's call; exact wording left to the builder).
-- If no bird qualifies today, or BirdNET can't be reached, show one line saying which for about 5 seconds, then go back to the glance screen (designer's call).
+- **The source is the user's wildlife-cam gallery (user, 2026-10-25), not a BirdNET-Go server.** The user doesn't run BirdNET-Go. wildlife-cam runs BirdNET on its camera audio and serves the result on the LAN as `GET /frame/wildlife`, which needs no login:
+  - The reply is JSON: `{"sighting": …, "sightings": […], "birds": […]}`.
+  - `birds` holds up to 12 recent birds heard, newest first, one per species.
+  - Each bird has `label` (such as `Steller's Jay`), `time` (preformatted, `5:21 PM` today or `Oct 23, 10:52 PM` for an earlier day), `confidence` (preformatted, such as `46%`), `photo_url` and `audio_url`.
+  - `photo_url` is relative to the gallery, such as `/species_photo/comrav`. It serves a Wikipedia species photo as a baseline JPEG, about 330 px wide and 17–51 KB in the samples taken. It may 404, in which case wildlife-cam's own page falls back to a spectrogram.
+- **The photo:** the newest bird (`birds[0]`) **(user)**. Its species photo is streamed full screen, scaled to fit with its aspect ratio kept and centred on black (designer's call; the viewer stretched photos to fill).
+- **The details page (designer's call):**
+  - the bird's name, wrapped over two rows;
+  - its time, and its confidence;
+  - under `also heard`, the next birds in the list, one per row, as many as fit. Each row is the name, then the time when the whole row still fits.
+  - The viewer's family, weather, call count and species totals came from BirdNET-Go and are dropped. So is the 0.80 confidence floor: wildlife-cam has already filtered what it lists.
+- **No usable photo:** if the photo can't be fetched or decoded (a 404, a PNG, a progressive JPEG, too large), the tap goes straight to the details page (designer's call).
+- The gallery is only queried on a tap. It is not polled in the background (designer's call).
+- A tap must visibly respond within a fraction of a second, because the photo can take seconds to stream.
+- **Messages, shown for about 5 seconds before the glance screen returns (designer's call):**
+  - no gallery address saved: `NO WILDLIFE CAM` / `use phone setup`;
+  - an empty `birds` list: `NO BIRDS YET`;
+  - the request failed or the reply couldn't be read: `WILDLIFE ERROR` / the reason;
+  - no Wi-Fi: `NO WI-FI`.
+- Labels can hold characters the board's 6x8 font lacks, such as a curly apostrophe. They are shown with ASCII stand-ins (designer's call).
 
 ### Before the first readings
 
@@ -102,17 +115,19 @@ The Home Assistant address, token and four entity IDs live in the board's NVS li
 | Key | Contents |
 |---|---|
 | `ha_url` | e.g. `http://192.168.1.33:8123`; no default |
-| `ha_token` | A Home Assistant long-lived access token, about 180 characters. The user creates it at the bottom of their HA profile page, under Security. |
+| `ha_token` | A Home Assistant long-lived access token, about 180 characters. The user creates it at the bottom of their HA profile page, under Security. **It must belong to an admin user:** Home Assistant's `POST /api/template` is admin-only and answers a non-admin token with 401 (found on the board, 2026-10-25). |
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Entity IDs, such as `sensor.some_name` |
+| `wildlife_url` | The wildlife-cam gallery, such as `http://192.168.1.50:8080`; no default. It replaces `birdnet_url`, which is no longer read or written (2026-10-25). |
 
 If any of these is missing, the status page names what's missing and says to use phone setup.
 
 **Where they're entered:**
-- The launcher's phone setup page gets a `Home Assistant` section under the BirdNET field, with six fields:
+- The launcher's phone setup page gets a `Home Assistant` section under the server field, with six fields:
   - address;
   - token;
   - an entity ID for each of Upstairs, Downstairs, Outside and Shop battery.
-- They behave like the existing BirdNET field: blank erases the setting.
+- They behave like the existing server field: blank erases the setting.
+- The BirdNET server field becomes `Wildlife camera server` and stores `wildlife_url` (2026-10-25). It is validated as an `http://` address, as the BirdNET field was.
 - The token is the exception:
   - When the address is unchanged, a blank token keeps the saved one, as the Wi-Fi password does.
   - The token is never shown back on the page.
@@ -139,7 +154,7 @@ If any of these is missing, the status page names what's missing and says to use
 - **Grown from the viewer:** the dashboard replaces `birdnet_viewer` **(user)**.
   - Start with `git mv apps/birdnet_viewer apps/home_dashboard`, so the viewer's history carries over.
   - Then rename `project()` and `build_dir`, and build the glance screen and Home Assistant client on top.
-  - The bird fetch, JPEG streaming, details page and status page stay; the 2-minute BirdNET polling becomes tap-only.
+  - The JPEG streaming and status page stay; the 2-minute BirdNET polling becomes tap-only. The BirdNET-Go fetches and details were later replaced by wildlife-cam (see Birds).
   - Update every mention of `birdnet_viewer`: the root README, `docs/INSTALL.md`, `CLAUDE.md`, the Copilot notes, the app's own README, and the phone page's BirdNET field, which says `for the BirdNET viewer`.
 - **Big digits:**
   - The text grid's 5x7 font scaled up looks too blocky at 100 px.
