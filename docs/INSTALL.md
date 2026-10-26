@@ -89,7 +89,7 @@ The layout:
 
 There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the Home Assistant settings and the `Wildlife camera server`. The launcher saves the settings in the board's NVS storage, where every app reads them.
 
-The setup page also has an **Updates** field for the **update key**, which lets your Mac push builds to the board. Make one on the Mac (see section 7), then type it into that field. The board keeps it normalized, and a blank field keeps the saved key. Without a key, the board refuses every push.
+The setup page also has an **Updates** field for the **update key**, which lets your Mac push builds to the board. The first push from the Mac gives a board that has no key its key (see section 7), so this field is for setting one by hand or changing it. The board keeps it normalized, and a blank field keeps the saved key. Without a key, the board refuses every push.
 
 The home dashboard needs:
 
@@ -134,10 +134,10 @@ There are two ways: over Wi-Fi, which is the everyday route, and over USB with e
 
 ### Over the network
 
-`pio run -t upload`, run in `launcher/` or an app folder, sends the built `firmware.bin` to the board over HTTP. The script is `tools/cyd_push.py`. It needs Python 3.9 or newer and `curl`, and it signs each push with the update key, so no key crosses the network. Three things must be in place:
+`pio run -t upload`, run in `launcher/` or an app folder, sends the built `firmware.bin` to the board over HTTP. The script is `tools/cyd_push.py`. It needs Python 3.9 or newer and `curl`, and it signs each push with the update key, so the key crosses the network only once: when the first push gives it to a board that has none. Three things must be in place:
 
 1. **The board's address.** The board announces itself as `cyd-xxxx.local`, where `xxxx` is the last four hex digits of its Wi-Fi MAC address; the launcher's bottom row shows its IP address too. There is no default. Set `CYD_HOST` (for example `export CYD_HOST=cyd-xxxx.local`), or put the address on the first line of `~/.config/cyd/host`.
-2. **The update key.** Run `python3 tools/cyd_push.py --new-key` once. It saves a key to `~/.config/cyd/update_key` with mode 600, or to the file `CYD_KEY_FILE` names, and on macOS copies it to the clipboard with `pbcopy`. It refuses to overwrite an existing key unless you add `--force`. Paste the key into the Updates field of the board's phone setup page. The script refuses a key file that others can read.
+2. **The update key.** Run `python3 tools/cyd_push.py --new-key` once. It saves a key to `~/.config/cyd/update_key` with mode 600, or to the file `CYD_KEY_FILE` names, and on macOS copies it to the clipboard with `pbcopy`. It refuses to overwrite an existing key unless you add `--force`. The first push sends it to a board that has no key, over plain HTTP, so anything on your network could give such a board a key first. A board that has a key refuses a new one over the network; change it on the phone setup page. The script refuses a key file that others can read.
 3. **A board running an app that has `cyd_update`.** The running app takes the push, not the launcher's menu, so let the launcher's countdown boot the app first. A board with older images needs the one-time USB step below.
 
 ```bash
@@ -174,7 +174,7 @@ $L = "$env:USERPROFILE\.platformio\cyd-launcher-build\esp32dev"
     0x150000 path\to\firmware.bin
 ```
 
-Leave out the partition table (`0x8000`, unchanged) and `ota_data_initial.bin`, so `otadata` keeps selecting that slot. Then enter the update key on the phone setup page, or `pio run -t upload` reports `no update key on the board`.
+Leave out the partition table (`0x8000`, unchanged) and `ota_data_initial.bin`, so `otadata` keeps selecting that slot. The first `pio run -t upload` then gives the board its update key.
 
 Until a board has had this step, its old launcher lists the `launcher` release as an app. Don't tap it there: it would put the launcher image in an app slot.
 
@@ -226,7 +226,7 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | A `sdkconfig.defaults` change has no effect | Delete `sdkconfig.esp32dev` and rebuild. |
 | CI build fails on size | The workflow checks each app's `firmware.bin` against a launcher slot, 1,376,256 bytes, and the launcher's against the factory partition, 1,310,720 bytes. Make the image smaller. |
 | `pio run -t upload` prints `busy <seconds>` | The board is installing, or is inside the 60 second window after a new build starts. The script waits and retries three times; run it again after that. |
-| `no update key on the board` | Enter the key on the phone setup page's Updates field. `python3 tools/cyd_push.py --new-key` makes one. |
+| `the board already has an update key` | The board's key isn't the one in `~/.config/cyd/update_key`. Enter the Mac's key on the phone setup page's Updates field. |
 | `wrong key or expired challenge` | The key on the board differs from `~/.config/cyd/update_key`, or the challenge was used up before the push arrived: something else asked the board for a challenge or pushed in between, or more than 60 seconds passed between the script's challenge request and its push. Re-enter the key and retry. |
 | `no board address` | Set `CYD_HOST` or fill `~/.config/cyd/host`. |
 | `No route to host` from Python | macOS blocks that Python from the local network; the script uses `curl`, so check that `curl http://cyd-xxxx.local/update/challenge` works, and that VS Code is allowed local network access. |

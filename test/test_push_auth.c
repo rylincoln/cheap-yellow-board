@@ -26,6 +26,16 @@ int main(void)
     b[31] ^= 1;
     CHECK(!push_auth_equal(a, b));
 
+    CHECK(push_auth_key_valid("ABCD1234EFGH5678JKMN"));
+    CHECK(push_auth_key_valid("0123456789ABCDEFGHJK"));
+    CHECK(!push_auth_key_valid("ABCD1234EFGH5678JKM"));   /* 19 */
+    CHECK(!push_auth_key_valid("ABCD1234EFGH5678JKMNP")); /* 21 */
+    CHECK(!push_auth_key_valid("abcd1234efgh5678jkmn"));  /* not normalized */
+    CHECK(!push_auth_key_valid("ABCD-1234-EFGH-5678-J"));
+    CHECK(!push_auth_key_valid("ABCD1234EFGH5678JKMU"));  /* U isn't in the alphabet */
+    CHECK(!push_auth_key_valid("ABCD1234EFGH5678JKMO"));
+    CHECK(!push_auth_key_valid(""));
+
     uint8_t random[16];
     for (int i = 0; i < 16; ++i) {
         random[i] = (uint8_t)i;

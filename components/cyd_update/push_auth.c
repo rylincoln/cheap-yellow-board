@@ -91,3 +91,17 @@ bool push_auth_equal(const uint8_t a[32], const uint8_t b[32])
     }
     return difference == 0;
 }
+
+bool push_auth_key_valid(const char *key)
+{
+    static const char alphabet[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    if (strlen(key) != PUSH_KEY_LENGTH) {
+        return false;
+    }
+    for (int i = 0; i < PUSH_KEY_LENGTH; ++i) {
+        if (strchr(alphabet, key[i]) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}

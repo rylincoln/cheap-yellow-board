@@ -155,6 +155,48 @@ class WriteNewKey(unittest.TestCase):
             self.assertEqual(target.read_text(), "left alone\n")
 
 
+class FetchChallenge(unittest.TestCase):
+    """The board's replies come from a stubbed curl, which notes each call."""
+
+    KEY = "ABCD1234EFGH5678JKMN"
+    CHALLENGE = "00112233445566778899aabbccddeeff"
+
+    def fetch(self, replies):
+        calls = []
+
+        def fake_curl(args, stdin=None):
+            calls.append((args[-1], stdin))
+            return replies.pop(0)
+
+        with mock.patch.object(cyd_push, "curl", fake_curl), contextlib.redirect_stdout(io.StringIO()):
+            result = cyd_push.fetch_challenge("http://cyd-xxxx.local", "cyd-xxxx.local", self.KEY)
+        return result, calls
+
+    def test_board_with_a_key_gets_no_key(self):
+        result, calls = self.fetch([(self.CHALLENGE, 200)])
+        self.assertEqual(result, (self.CHALLENGE, 200))
+        self.assertEqual(calls, [("http://cyd-xxxx.local/update/challenge", None)])
+
+    def test_board_without_a_key_is_given_one_first(self):
+        no_key = "no update key on the board: set one on the phone setup page"
+        result, calls = self.fetch([(no_key, 403), ("key saved", 200), (self.CHALLENGE, 200)])
+        self.assertEqual(result, (self.CHALLENGE, 200))
+        self.assertEqual(calls, [("http://cyd-xxxx.local/update/challenge", None),
+                                 ("http://cyd-xxxx.local/update/key", self.KEY),
+                                 ("http://cyd-xxxx.local/update/challenge", None)])
+
+    def test_refused_key_is_the_answer(self):
+        no_key = "no update key on the board: set one on the phone setup page"
+        result, calls = self.fetch([(no_key, 403), ("the board already has an update key", 409)])
+        self.assertEqual(result, ("the board already has an update key", 409))
+        self.assertEqual(len(calls), 2)
+
+    def test_wrong_key_reply_sends_no_key(self):
+        result, calls = self.fetch([("wrong key or expired challenge", 403)])
+        self.assertEqual(result, ("wrong key or expired challenge", 403))
+        self.assertEqual(len(calls), 1)
+
+
 class BusySeconds(unittest.TestCase):
     def test_busy(self):
         self.assertEqual(cyd_push.busy_seconds("busy 42"), 42)

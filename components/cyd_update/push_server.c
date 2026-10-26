@@ -4,7 +4,10 @@
    POST /update with the image as the body and an HMAC-SHA256, keyed with the
    update key, over the challenge and what it says about the image. Nothing
    is erased before that HMAC and the image's description check out. Every
-   reply is one line of plain text, which the Mac prints. */
+   reply is one line of plain text, which the Mac prints.
+
+   A board without a key takes its first one from POST /update/key, in the
+   clear, from anyone on the network. Replacing a saved key needs phone setup. */
 
 #include "push_server.h"
 
@@ -58,6 +61,8 @@
 
 #define REPLY_NO_KEY "no update key on the board: set one on the phone setup page"
 #define REPLY_WRONG_KEY "wrong key or expired challenge"
+#define REPLY_HAVE_KEY "the board already has an update key: change it on the phone setup page"
+#define REPLY_BAD_KEY "not an update key"
 
 /* The stored key is 20 characters; the launcher saves it normalized. */
 #define KEY_SIZE 40
@@ -122,6 +127,20 @@ static bool read_key(char key[KEY_SIZE])
     esp_err_t result = nvs_get_str(nvs, CYD_CONFIG_UPDATE_KEY, key, &size);
     nvs_close(nvs);
     return result == ESP_OK && key[0] != '\0';
+}
+
+static bool write_key(const char *key)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(CYD_CONFIG_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
+        return false;
+    }
+    esp_err_t result = nvs_set_str(nvs, CYD_CONFIG_UPDATE_KEY, key);
+    if (result == ESP_OK) {
+        result = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    return result == ESP_OK;
 }
 
 /* Copies a header that is present, not empty, and at most size - 2
@@ -412,6 +431,35 @@ static esp_err_t update_post(httpd_req_t *request)
     return sent;
 }
 
+/* POST /update/key: the first key, as the body. Taken only while none is saved. */
+static esp_err_t key_post(httpd_req_t *request)
+{
+    char key[KEY_SIZE];
+    bool have_key = read_key(key);
+    mbedtls_platform_zeroize(key, sizeof(key));
+    if (have_key) {
+        return refuse(request, STATUS_CONFLICT, REPLY_HAVE_KEY);
+    }
+    char body[KEY_SIZE];
+    size_t length = request->content_len;
+    esp_err_t sent;
+    if (length >= sizeof(body) || !receive(request, (uint8_t *)body, length)) {
+        sent = refuse(request, HTTPD_400, REPLY_BAD_KEY);
+    } else {
+        body[length] = '\0';
+        if (!push_auth_key_valid(body)) {
+            sent = refuse(request, HTTPD_400, REPLY_BAD_KEY);
+        } else if (!write_key(body)) {
+            sent = reply(request, HTTPD_500, "could not save the key");
+        } else {
+            ESP_LOGI(TAG, "Update key saved from the network");
+            sent = reply(request, HTTPD_200, "key saved");
+        }
+    }
+    mbedtls_platform_zeroize(body, sizeof(body));
+    return sent;
+}
+
 static esp_err_t start_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -427,9 +475,13 @@ static esp_err_t start_server(void)
     const httpd_uri_t challenge_uri = {
         .uri = "/update/challenge", .method = HTTP_GET, .handler = challenge_get};
     const httpd_uri_t update_uri = {.uri = "/update", .method = HTTP_POST, .handler = update_post};
+    const httpd_uri_t key_uri = {.uri = "/update/key", .method = HTTP_POST, .handler = key_post};
     result = httpd_register_uri_handler(server, &challenge_uri);
     if (result == ESP_OK) {
         result = httpd_register_uri_handler(server, &update_uri);
+    }
+    if (result == ESP_OK) {
+        result = httpd_register_uri_handler(server, &key_uri);
     }
     if (result != ESP_OK) {
         httpd_stop(server);

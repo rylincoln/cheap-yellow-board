@@ -24,6 +24,8 @@ from typing import Optional
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 KEY_LENGTH = 20
 MAX_BUSY_RETRIES = 3
+# How a board without an update key answers a challenge request.
+NO_KEY_REPLY = "no update key on the board"
 
 IMAGE_DESC_BYTES = 256
 DESC_MAGIC = bytes([0x32, 0x54, 0xCD, 0xAB])
@@ -154,19 +156,33 @@ def commit_time() -> int:
         raise RuntimeError("cannot read the commit time of HEAD from git in %s" % root)
 
 
-def curl(args) -> "tuple[str, int]":
-    """Runs curl; returns the reply text and HTTP status."""
+def curl(args, stdin: Optional[str] = None) -> "tuple[str, int]":
+    """Runs curl, feeding it stdin if given; returns the reply text and HTTP status."""
     # --ipv4: the board has no IPv6 address, and macOS waits 5 s for an AAAA
     # answer for a .local name before it settles for the IPv4 one.
     try:
         done = subprocess.run(["curl", "-sS", "--ipv4"] + list(args) + ["-w", "\n%{http_code}"],
-                              capture_output=True, text=True)
+                              input=stdin, capture_output=True, text=True)
     except OSError:
         raise RuntimeError("curl was not found on PATH")
     if done.returncode != 0:
         raise RuntimeError("curl failed: %s" % (done.stderr.strip() or "exit %d" % done.returncode))
     body, _, code = done.stdout.rpartition("\n")
     return body.strip(), int(code) if code.isdigit() else 0
+
+
+def fetch_challenge(base: str, host: str, key: str) -> "tuple[str, int]":
+    """Asks for a challenge. A board without a key is given this one first, in
+    the clear: the board takes a first key from anyone on the network."""
+    reply, status = curl(["--max-time", "10", base + "/update/challenge"])
+    if status == 403 and reply.startswith(NO_KEY_REPLY):
+        saved, saved_status = curl(["--max-time", "10", "--data-binary", "@-",
+                                    base + "/update/key"], stdin=key)
+        print("%s: %s" % (host, saved))
+        if saved_status != 200:
+            return saved, saved_status
+        reply, status = curl(["--max-time", "10", base + "/update/challenge"])
+    return reply, status
 
 
 def push(firmware: str) -> int:
@@ -181,7 +197,7 @@ def push(firmware: str) -> int:
 
     reply, status = "", 0
     for attempt in range(MAX_BUSY_RETRIES + 1):
-        challenge, status = curl(["--max-time", "10", base + "/update/challenge"])
+        challenge, status = fetch_challenge(base, host, key)
         if status != 200:
             print("%s: %s" % (host, challenge))
             return 1
