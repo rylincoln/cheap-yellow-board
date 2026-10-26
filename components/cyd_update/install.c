@@ -6,8 +6,6 @@
 #include "esp_log.h"
 #include "records.h"
 
-#define LAUNCHER_PROJECT "cyd_launcher"
-
 static const char *TAG = "cyd_update";
 
 /* Gives up on an install. A target that was erased loses its first sector

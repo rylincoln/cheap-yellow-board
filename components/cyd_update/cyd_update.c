@@ -36,8 +36,6 @@ static uint32_t screen_bit;
 static volatile bool screen_drawn;
 /* Apps start on a screen an update may take, such as a status page. */
 static volatile bool interruptible = true;
-/* Wi-Fi has had an address since start-up. */
-static volatile bool network_up;
 
 /* Whether the push server runs, or a task is starting it. */
 typedef enum { PUSH_SERVER_STOPPED, PUSH_SERVER_STARTING, PUSH_SERVER_RUNNING } push_server_state_t;
@@ -137,8 +135,9 @@ esp_err_t cyd_update_init(const cyd_update_config_t *config)
              have_state ? state_name(state) : "no OTA state");
     const esp_partition_t *invalid = esp_ota_get_last_invalid_partition();
     if (invalid != NULL) {
-        ESP_LOGW(TAG, "A new build failed its start: rolled back from slot %c",
-                 slot_letter(invalid));
+        /* ESP-IDF remembers the slot until it is written again, so this
+           shows at every start until the next update. */
+        ESP_LOGW(TAG, "Slot %c holds a build that failed its start", slot_letter(invalid));
     }
     records_check_usb();
 
@@ -179,7 +178,6 @@ static void push_start_task(void *argument)
    reconnect checks without waiting out the hour. */
 void cyd_update_network_up(void)
 {
-    network_up = true;
     portENTER_CRITICAL(&state_lock);
     bool start = push_server_state == PUSH_SERVER_STOPPED;
     if (start) {

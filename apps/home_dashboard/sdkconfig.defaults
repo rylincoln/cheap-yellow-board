@@ -8,6 +8,7 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # Lets a pushed or downloaded build roll back to the previous one if it never marks itself good.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# Pushes from the Mac: request headers can pass the 1 KB default,
-# which the server refuses with HTTP 431.
+# A push from the Mac sends about 450 bytes of request headers, inside the
+# 1 KB default. 2048 matches the launcher, where browsers on the phone setup
+# page need it; the server allocates only what a request's headers take.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048

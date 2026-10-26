@@ -23,6 +23,8 @@
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "image_desc.h"
 #include "install.h"
 #include "mbedtls/platform_util.h"
@@ -308,6 +310,13 @@ static char slot_letter(const esp_partition_t *partition)
     return (char)('A' + (partition->subtype - ESP_PARTITION_SUBTYPE_APP_OTA_MIN));
 }
 
+/* For watching memory on the board, after the install's deepest calls. */
+static void log_stack_left(void)
+{
+    ESP_LOGI(TAG, "Push done; %u bytes of the server's stack never used",
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+
 /* A new app starts at once: the board answers, shows RESTARTING and restarts. */
 static void restart_into(httpd_req_t *request, const install_t *install)
     __attribute__((noreturn));
@@ -317,6 +326,7 @@ static void restart_into(httpd_req_t *request, const install_t *install)
     snprintf(text, sizeof(text), "installed %s in slot %c; restarting", install->desc.project,
              slot_letter(install->partition));
     reply(request, HTTPD_200, text);
+    log_stack_left();
     update_screen_take(RESTART_SCREEN_WAIT_MS);
     update_screen_finish(UPDATE_TITLE_RESTARTING, NULL, UPDATE_RESTARTING_MS, true);
     esp_restart();
@@ -353,6 +363,7 @@ static esp_err_t install_locked(httpd_req_t *request, const push_t *push,
             update_screen_finish(UPDATE_TITLE_FAILED, failure.reason, UPDATE_FAILED_MS, false);
         }
     }
+    log_stack_left();
     update_unlock();
     return sent;
 }

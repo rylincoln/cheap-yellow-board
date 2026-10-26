@@ -21,6 +21,7 @@
 #include "cyd_display.h"
 #include "esp_app_desc.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_image_format.h"
 #include "esp_log.h"
@@ -53,7 +54,6 @@
 #define API_TIMEOUT_MS 10000
 #define DOWNLOAD_TIMEOUT_MS 15000
 #define LAUNCHER_TAG "launcher"
-#define LAUNCHER_PROJECT "cyd_launcher" /* the name install.c knows the launcher by */
 #define RELEASE_URL_FORMAT "https://api.github.com/repos/" CYD_IMAGE_REPO "/releases/tags/%s"
 #define URL_SIZE 128
 #define PROJECT_SIZE 33
@@ -248,8 +248,11 @@ static const char *stream_asset(esp_http_client_handle_t client, const update_re
                  release->size);
         return "size differs";
     }
+    /* Fewer bytes than both the description and the release's size means
+       the connection ended early, not that the image is wrong. */
     int got = read_body(client, chunk, IMAGE_DESC_BYTES);
-    if (got < 0) {
+    if (got < 0 || ((size_t)got < IMAGE_DESC_BYTES && (size_t)got < release->size)) {
+        ESP_LOGW(TAG, "Download of %s stopped before its app description", project);
         return "transfer stopped";
     }
     image_desc_t desc;
@@ -391,18 +394,33 @@ static void check_image(image_kind_t kind, const char *tag, const char *project)
     install_release(&release, project, expected_sha256);
 }
 
+/* A board laid out without a launcher runs its app from factory, where a
+   launcher release could never install. */
+static bool running_from_factory(void)
+{
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *factory = target_partition(IMAGE_LAUNCHER);
+    return running != NULL && factory != NULL && running->address == factory->address;
+}
+
 static void check_releases(void)
 {
     /* The description's 32-character name has no terminator when full. */
     char project[PROJECT_SIZE];
     snprintf(project, sizeof(project), "%.32s", esp_app_get_description()->project_name);
-    ESP_LOGI(TAG, "Checking GitHub for the launcher and %s", project);
-    check_image(IMAGE_LAUNCHER, LAUNCHER_TAG, LAUNCHER_PROJECT);
+    if (running_from_factory()) {
+        ESP_LOGI(TAG, "Checking GitHub for %s; it runs from factory, so not for the launcher",
+                 project);
+    } else {
+        ESP_LOGI(TAG, "Checking GitHub for the launcher and %s", project);
+        check_image(IMAGE_LAUNCHER, LAUNCHER_TAG, LAUNCHER_PROJECT);
+    }
     check_image(IMAGE_APP, project, project);
     /* For watching memory on the board: every reply and connection is gone by now. */
     ESP_LOGI(TAG, "GitHub check done; free heap %" PRIu32 " bytes, lowest %" PRIu32
-                  "; %u bytes of stack never used",
+                  ", largest block %u; %u bytes of stack never used",
              esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 }
 

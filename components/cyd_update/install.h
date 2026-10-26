@@ -14,6 +14,9 @@
 #include "image_desc.h"
 #include "mbedtls/md.h"
 
+/* The launcher's project name: an image with it installs into factory. */
+#define LAUNCHER_PROJECT "cyd_launcher"
+
 typedef enum { INSTALL_FROM_MAC, INSTALL_FROM_GITHUB } install_source_t;
 
 typedef struct install {
@@ -30,7 +33,7 @@ typedef struct install {
     size_t written;
 } install_t; /* callers keep one on their stack */
 
-/* project cyd_launcher: the factory partition, with plain erase and write; else the OTA slot that
+/* LAUNCHER_PROJECT: the factory partition, with plain erase and write; else the OTA slot that
    isn't running, through esp_ota_begin. ESP_ERR_INVALID_SIZE when it doesn't fit, before touching
    flash. Clears that slot's records, then erases. */
 esp_err_t install_begin(install_t *install, const image_desc_t *desc, size_t length, install_source_t source);
@@ -41,7 +44,8 @@ esp_err_t install_write(install_t *install, const void *data, size_t length); /*
    On any failure the install is already abandoned. */
 esp_err_t install_finish(install_t *install, const uint8_t *expected_sha256, int64_t commit_time,
                          const char *launcher_version);
-void install_abort(install_t *install); /* any time after install_begin, whatever it returned */
+/* Any time after install_begin, whatever it returned, or on a zeroed install_t. */
+void install_abort(install_t *install);
 bool install_is_launcher(const install_t *install);
 int install_percent(const install_t *install);
 
