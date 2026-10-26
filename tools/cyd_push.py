@@ -12,6 +12,7 @@ are done here.
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -78,6 +79,14 @@ def board_host(environ, host_file: Path) -> str:
     raise RuntimeError("no board address: set CYD_HOST (for example cyd-e5d0.local) or put it in %s" % host_file)
 
 
+def check_challenge(reply: str, host: str) -> str:
+    """The challenge, which the board sends as 32 lowercase hex digits."""
+    if not re.fullmatch(r"[0-9a-f]{32}", reply):
+        raise RuntimeError("%s did not answer with a challenge (32 hex digits): "
+                           "CYD_HOST may point at another device" % host)
+    return reply
+
+
 def busy_seconds(reply: str) -> Optional[int]:
     """N from a `busy N` reply, else None."""
     parts = reply.split()
@@ -100,8 +109,10 @@ def load_key() -> str:
     try:
         mode = path.stat().st_mode
     except OSError:
-        raise RuntimeError("no update key at %s: run `python3 tools/cyd_push.py --new-key`" % path)
-    if mode & 0o077:
+        script = shlex.quote(str(Path(__file__).resolve()))
+        raise RuntimeError("no update key at %s: run `python3 %s --new-key`" % (path, script))
+    # Windows has no such permission bits to check.
+    if os.name != "nt" and mode & 0o077:
         raise RuntimeError("%s is readable by others: run `chmod 600 %s`" % (path, path))
     return normalize_key(path.read_text())
 
@@ -109,15 +120,21 @@ def load_key() -> str:
 def write_new_key(force: bool) -> None:
     path = key_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_CREAT | (os.O_TRUNC if force else os.O_EXCL)
+    if force:
+        # A new file, so neither an old file's mode nor a symlink carries over.
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
     try:
-        fd = os.open(str(path), flags, 0o600)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         raise RuntimeError("%s already exists: use --new-key --force to replace it" % path)
+    if hasattr(os, "fchmod"):
+        os.fchmod(fd, 0o600)  # whatever the umask took away
     key = new_key()
     with os.fdopen(fd, "w") as handle:
         handle.write(key + "\n")
-    os.chmod(str(path), 0o600)
     try:
         subprocess.run(["pbcopy"], input=key.encode(), check=True)
         copied = "and copied to the clipboard"
@@ -166,6 +183,7 @@ def push(firmware: str) -> int:
         if status != 200:
             print("%s: %s" % (host, challenge))
             return 1
+        challenge = check_challenge(challenge, host)
         message = auth_message(challenge, len(image), sha, project, when)
         digest = hmac.new(key.encode(), message, hashlib.sha256).hexdigest()
         reply, status = curl(["--max-time", "180", "-H", "Expect:",

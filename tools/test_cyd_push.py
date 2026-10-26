@@ -1,12 +1,16 @@
 """Host tests for cyd_push.py. Run with: python3 tools/test_cyd_push.py"""
+import contextlib
 import hashlib
 import hmac
+import io
 import os
 import re
+import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cyd_push  # noqa: E402
@@ -106,6 +110,49 @@ class BoardHost(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             cyd_push.board_host({}, Path("/no/such/file"))
         self.assertIn("CYD_HOST", str(caught.exception))
+
+
+class CheckChallenge(unittest.TestCase):
+    def test_board_reply(self):
+        self.assertEqual(cyd_push.check_challenge("00112233445566778899aabbccddeeff", "cyd-xxxx.local"),
+                         "00112233445566778899aabbccddeeff")
+
+    def test_other_replies_name_cyd_host(self):
+        for reply in ["00112233445566778899AABBCCDDEEFF", "00112233445566778899aabbccddeef",
+                      "00112233445566778899aabbccddeeff0", "<html><body>Router</body></html>", ""]:
+            with self.assertRaises(RuntimeError) as caught:
+                cyd_push.check_challenge(reply, "cyd-xxxx.local")
+            self.assertIn("CYD_HOST", str(caught.exception))
+
+
+class WriteNewKey(unittest.TestCase):
+    """--new-key --force, with the clipboard and the printing stubbed out."""
+
+    def force_new_key(self, path):
+        with mock.patch.dict(os.environ, {"CYD_KEY_FILE": str(path)}), \
+                mock.patch.object(cyd_push.subprocess, "run"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            cyd_push.write_new_key(True)
+
+    def test_force_replaces_a_readable_file_with_a_private_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "update_key"
+            path.write_text("old\n")
+            path.chmod(0o644)
+            self.force_new_key(path)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(len(cyd_push.normalize_key(path.read_text())), 20)
+
+    def test_force_replaces_a_symlink_not_its_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / "elsewhere"
+            target.write_text("left alone\n")
+            path = Path(folder) / "update_key"
+            path.symlink_to(target)
+            self.force_new_key(path)
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(target.read_text(), "left alone\n")
 
 
 class BusySeconds(unittest.TestCase):
