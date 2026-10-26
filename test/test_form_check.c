@@ -34,5 +34,23 @@ int main(void)
     char url[32] = "192.168.1.5:8123";
     CHECK(form_url_valid(url, sizeof(url)));
     CHECK_STR(url, "http://192.168.1.5:8123");
+    char key[40] = "abcd-1234-efgh-5678-jkmn";
+    CHECK(form_update_key_normalize(key));
+    CHECK_STR(key, "ABCD1234EFGH5678JKMN");
+    char key2[40] = " ABCD 1234 EFGH 5678 JKMO\n";
+    CHECK(form_update_key_normalize(key2));
+    CHECK_STR(key2, "ABCD1234EFGH5678JKM0");
+    char key3[40] = "ilo0-1234-efgh-5678-jkmn";
+    CHECK(form_update_key_normalize(key3));
+    CHECK_STR(key3, "11001234EFGH5678JKMN");
+    char key4[40] = "  ";
+    CHECK(form_update_key_normalize(key4));
+    CHECK_STR(key4, "");
+    char key5[40] = "ABCD-1234";
+    CHECK(!form_update_key_normalize(key5));
+    char key6[40] = "ABCD-1234-EFGH-5678-JKMU";
+    CHECK(!form_update_key_normalize(key6));
+    char key7[40] = "ABCD-1234-EFGH-5678-JKMN-P";
+    CHECK(!form_update_key_normalize(key7));
     CHECK_DONE();
 }

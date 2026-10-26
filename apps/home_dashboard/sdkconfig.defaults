@@ -4,3 +4,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Lets a pushed or downloaded build roll back to the previous one if it never marks itself good.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# A push from the Mac sends about 450 bytes of request headers, inside the
+# 1 KB default. 2048 matches the launcher, where browsers on the phone setup
+# page need it; the server allocates only what a request's headers take.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=2048

@@ -8,7 +8,7 @@ Every app builds a binary that runs in either launcher slot. They all use one co
 
 ## How it boots
 
-On power-on, including the EN button, the custom bootloader (`bootloader_components/main`) always starts the launcher. Any other reset, such as the launcher's own restart or an image crashing, goes straight back to the chosen image.
+On power-on, including the EN button, the custom bootloader (`bootloader_components/main`) starts the launcher, or the chosen image if the launcher's image doesn't verify. Any other reset, such as the launcher's own restart or an image crashing, goes straight back to the chosen image.
 
 1. On the very first start, or whenever no network is saved, the Wi-Fi network chooser opens first (see below); the menu and its countdown follow once it closes.
 2. The menu immediately lists the stored images, marking the default with `*`, and counts down from 20 seconds. It shows seven entries at a time: the row below them says which (such as `1-7/9`), and its ▲ and ▼ buttons page through the rest.
@@ -30,6 +30,7 @@ No binary carries credentials, the launcher included. The launcher and every boo
 |---|---|
 | `wifi_ssid`, `wifi_pass` | The launcher's network chooser or phone setup |
 | `wildlife_url` | Phone setup: the wildlife camera gallery, such as `http://192.168.1.50:8080` |
+| `update_key` | Phone setup's Updates field, or the first push to a board without one: the key `tools/cyd_push.py --new-key` makes, which signs pushes from the Mac |
 | `ha_url`, `ha_token` | Phone setup: the Home Assistant address and a long-lived access token from an admin user |
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Phone setup: the four sensor entity IDs, such as `sensor.some_name` |
 
@@ -47,7 +48,7 @@ Flash layout (4 MB, `partitions.csv`):
 
 ## Publishing a boot image
 
-The repository's single workflow, `.github/workflows/build.yml`, builds this launcher and every app on each push. On `main` it publishes each app as `firmware.bin` on a release tagged with the app's folder name, which is what the launcher lists. The launcher itself is not published: flash it over USB together with its bootloader and partition table, as below.
+The repository's single workflow, `.github/workflows/build.yml`, builds this launcher and every app on each push. On `main` it publishes each app as `firmware.bin` on a release tagged with the app's folder name, which is what the launcher lists. The launcher is published too, on the `launcher` release, and a running app installs it, to take effect at the next power-on; its bootloader and partition table still go over USB, as below. `pio run -t upload` pushes a build to the board over the network; see [docs/INSTALL.md](../docs/INSTALL.md#7-put-builds-on-the-board).
 
 ## Build and flash
 
@@ -60,7 +61,7 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
 & $pio run
 ```
 
-**Do not use `pio run --target upload`.** It would flash a stock bootloader. Flash with esptool instead. This erases the board, including both image slots:
+`pio run --target upload` pushes over the network and never writes the bootloader. To flash over USB, use esptool. This erases the board, including both image slots:
 
 ```powershell
 $py = "$env:USERPROFILE\.platformio\penv\Scripts\python.exe"

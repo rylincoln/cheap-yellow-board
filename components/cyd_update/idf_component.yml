@@ -1,0 +1,3 @@
+dependencies:
+  # Names the board cyd-xxxx.local, so the Mac finds it for pushes.
+  espressif/mdns: "==1.14.0"

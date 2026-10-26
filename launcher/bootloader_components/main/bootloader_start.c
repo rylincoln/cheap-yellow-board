@@ -1,9 +1,11 @@
 /*
  * Second-stage bootloader override, based on ESP-IDF's bootloader_override
- * example. A power-on reset (which includes the EN button) always starts the
- * factory launcher. Any other reset, such as the software restart the
- * launcher performs after a choice, boots the image selected in otadata,
- * exactly like the stock bootloader.
+ * example. A power-on reset (which includes the EN button) starts the
+ * factory launcher if its image verifies. If an interrupted update left it
+ * invalid, the bootloader boots the image selected in otadata instead. Any
+ * other reset, such as the software restart the launcher performs after a
+ * choice, boots the image selected in otadata, exactly like the stock
+ * bootloader.
  */
 #include <stdbool.h>
 #include <sys/reent.h>
@@ -13,6 +15,7 @@
 #include "bootloader_init.h"
 #include "bootloader_utility.h"
 #include "bootloader_common.h"
+#include "esp_image_format.h"
 
 static const char *TAG = "boot";
 
@@ -34,8 +37,17 @@ void __attribute__((noreturn)) call_start_cpu0(void)
 
     int boot_index;
     if (esp_rom_get_reset_reason(0) == RESET_REASON_CHIP_POWER_ON && bs.factory.offset != 0) {
-        ESP_LOGI(TAG, "Power-on reset: starting launcher");
-        boot_index = FACTORY_INDEX;
+        esp_image_metadata_t metadata;
+        if (esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &bs.factory, &metadata) == ESP_OK) {
+            ESP_LOGI(TAG, "Power-on reset: starting launcher");
+            boot_index = FACTORY_INDEX;
+        } else {
+            ESP_LOGW(TAG, "Launcher image is invalid: starting the selected app");
+            boot_index = bootloader_utility_get_selected_boot_partition(&bs);
+            if (boot_index == INVALID_INDEX) {
+                bootloader_reset();
+            }
+        }
     } else {
         boot_index = bootloader_utility_get_selected_boot_partition(&bs);
         if (boot_index == INVALID_INDEX) {

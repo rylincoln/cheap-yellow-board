@@ -10,3 +10,4 @@ sdkconfig.*
 .worktrees/
 dist/
 managed_components/
+__pycache__/

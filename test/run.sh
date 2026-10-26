@@ -17,7 +17,18 @@ build/host-tests/bigfont
 cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_glance_layout.c apps/home_dashboard/main/glance_layout.c apps/home_dashboard/main/readings.c apps/home_dashboard/main/bigfont.c apps/home_dashboard/main/bigfont_data.c -lm -o build/host-tests/glance_layout
 build/host-tests/glance_layout
 
-cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main test/test_wildlife.c apps/home_dashboard/main/wildlife.c apps/home_dashboard/main/json_scan.c -o build/host-tests/wildlife
+cc -std=c11 -Wall -Wextra -Werror -Iapps/home_dashboard/main -Icomponents/json_scan/include test/test_wildlife.c apps/home_dashboard/main/wildlife.c components/json_scan/json_scan.c -o build/host-tests/wildlife
 build/host-tests/wildlife
+
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update test/test_push_auth.c components/cyd_update/push_auth.c -o build/host-tests/push_auth
+build/host-tests/push_auth
+
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update test/test_image_desc.c components/cyd_update/image_desc.c -o build/host-tests/image_desc
+build/host-tests/image_desc
+
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update -Icomponents/json_scan/include test/test_update_rules.c components/cyd_update/update_rules.c components/json_scan/json_scan.c -o build/host-tests/update_rules
+build/host-tests/update_rules
+
+python3 tools/test_cyd_push.py
 
 echo "host tests passed"

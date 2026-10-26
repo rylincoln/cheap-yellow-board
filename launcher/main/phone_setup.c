@@ -45,6 +45,7 @@ static offered_network_t networks[MAX_NETWORKS];
 static int network_count;
 static phone_settings_t saved_settings; /* password and token left empty */
 static bool token_saved;
+static bool update_key_saved;
 
 /* ---- DNS: every name is the board, so phones find the page ---- */
 
@@ -266,6 +267,15 @@ static void send_form(httpd_req_t *request, const char *error,
         send_escaped(request, settings->ha_sensors[i]);
         httpd_resp_sendstr_chunk(request, "\">");
     }
+    httpd_resp_sendstr_chunk(
+        request,
+        "<h2>Updates</h2><label>Update key</label>"
+        "<input name=\"update_key\" type=\"text\" maxlength=\"39\" autocomplete=\"off\" "
+        "autocapitalize=\"characters\" autocorrect=\"off\" spellcheck=\"false\">");
+    httpd_resp_sendstr_chunk(request, update_key_saved
+                                          ? "<small>Blank keeps the saved key.</small>"
+                                          : "<small>Make one on the Mac: "
+                                            "tools/cyd_push.py --new-key</small>");
     httpd_resp_sendstr_chunk(request, "<button class=\"go\">Save and connect</button>"
                                       "</form></main></body></html>");
     httpd_resp_sendstr_chunk(request, NULL);
@@ -352,6 +362,9 @@ static esp_err_t save_post(httpd_req_t *request)
     bool token_ok = form_field(form, "ha_token", submitted.ha_token, sizeof(submitted.ha_token));
     /* Pasting can add spaces or a newline; a token of only those counts as blank. */
     form_trim(submitted.ha_token);
+    bool update_key_ok =
+        form_field(form, "update_key", submitted.update_key, sizeof(submitted.update_key)) &&
+        form_update_key_normalize(submitted.update_key);
     bool sensors_ok = true;
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
         sensors_ok = form_field(form, SENSOR_KEYS[i], submitted.ha_sensors[i],
@@ -365,6 +378,7 @@ static esp_err_t save_post(httpd_req_t *request)
                         : !ha_url_ok                ? "The Home Assistant address must be an http:// address."
                         : !token_ok                 ? "The token is too long."
                         : !sensors_ok               ? "Sensor IDs look like sensor.some_name."
+                        : !update_key_ok            ? "The update key is 20 letters and digits, as the Mac made it."
                                                     : NULL;
     if (error == NULL && !save_settings(&submitted)) {
         error = "The board could not save that. Try again.";
@@ -373,6 +387,7 @@ static esp_err_t save_post(httpd_req_t *request)
         send_form(request, error, &submitted);
         memset(submitted.password, 0, sizeof(submitted.password));
         memset(submitted.ha_token, 0, sizeof(submitted.ha_token));
+        memset(submitted.update_key, 0, sizeof(submitted.update_key));
         return ESP_OK;
     }
 
@@ -388,6 +403,7 @@ static esp_err_t save_post(httpd_req_t *request)
     ESP_LOGI(TAG, "A phone saved Wi-Fi network %s", submitted.ssid);
     memset(submitted.password, 0, sizeof(submitted.password));
     memset(submitted.ha_token, 0, sizeof(submitted.ha_token));
+    memset(submitted.update_key, 0, sizeof(submitted.update_key));
     return ESP_OK;
 }
 
@@ -447,7 +463,9 @@ static void copy_config(const phone_setup_config_t *config)
     saved_settings = *config->saved;
     memset(saved_settings.password, 0, sizeof(saved_settings.password));
     memset(saved_settings.ha_token, 0, sizeof(saved_settings.ha_token));
+    memset(saved_settings.update_key, 0, sizeof(saved_settings.update_key));
     token_saved = config->ha_token_saved;
+    update_key_saved = config->update_key_saved;
     save_settings = config->save;
     saved = false;
 }

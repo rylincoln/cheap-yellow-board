@@ -32,10 +32,11 @@
    name, which is also its CMake project name. Every release with that asset
    is offered. Build with -DIMAGE_REPO='"owner/repo"' to use another repo. */
 #ifndef IMAGE_REPO
-#define IMAGE_REPO "rylincoln/cheap-yellow-board"
+#define IMAGE_REPO CYD_IMAGE_REPO
 #endif
 #define RELEASES_URL "https://api.github.com/repos/" IMAGE_REPO "/releases?per_page=100"
 #define IMAGE_ASSET_NAME "firmware.bin"
+#define LAUNCHER_RELEASE_TAG "launcher" /* the launcher's own release, not an app */
 
 /* Settings this launcher stores in NVS for the boot images, which are
    published publicly and so carry no credentials of their own. The
@@ -318,9 +319,23 @@ static bool save_phone_settings(const phone_settings_t *settings)
     for (int i = 0; stored && i < PHONE_HA_SENSOR_COUNT; ++i) {
         stored = store_or_erase(nvs, SENSOR_KEYS[i], settings->ha_sensors[i]);
     }
+    if (stored && settings->update_key[0] != '\0') {
+        stored = store_or_erase(nvs, CYD_CONFIG_UPDATE_KEY, settings->update_key);
+    }
     stored = stored && nvs_commit(nvs) == ESP_OK;
     nvs_close(nvs);
     return stored;
+}
+
+/* True for a slot whose last image failed its first start and was rolled
+   back; slots without a recorded state count as fine. */
+static bool slot_rolled_back(int slot)
+{
+    esp_ota_img_states_t state;
+    if (esp_ota_get_state_partition(slots[slot].partition, &state) != ESP_OK) {
+        return false;
+    }
+    return state == ESP_OTA_IMG_INVALID || state == ESP_OTA_IMG_ABORTED;
 }
 
 /* The image that boots when nobody chooses: the last one chosen, else the
@@ -334,7 +349,7 @@ static int default_slot(void)
         }
     }
     for (int i = 0; i < SLOT_COUNT; ++i) {
-        if (slots[i].valid) {
+        if (slots[i].valid && !slot_rolled_back(i)) {
             return i;
         }
     }
@@ -1065,7 +1080,8 @@ static net_state_t fetch_release_images(void)
              tag = json_value(tag, end, "tag_name")) {
             char tag_name[IMAGE_NAME_SIZE];
             remote_image_t *image = &remote_images[remote_count];
-            if (!json_copy_string(tag, tag_name, sizeof(tag_name))) {
+            if (!json_copy_string(tag, tag_name, sizeof(tag_name)) ||
+                strcmp(tag_name, LAUNCHER_RELEASE_TAG) == 0) {
                 continue;
             }
             if (find_release_image(buffer.data, tag_name, image)) {
@@ -1879,6 +1895,10 @@ static bool phone_setup_screen(const network_list_t *list)
         "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
     static phone_settings_t saved; /* the page keeps its own copy */
     char ssid[33];
+    char update_key[40]; /* only whether one is set matters; never shown */
+    load_config_string(CYD_CONFIG_UPDATE_KEY, "", update_key, sizeof(update_key));
+    bool update_key_saved = update_key[0] != '\0';
+    memset(update_key, 0, sizeof(update_key));
     load_config_string("wifi_ssid", "", saved.ssid, sizeof(saved.ssid));
     load_config_string("wildlife_url", "", saved.wildlife_url, sizeof(saved.wildlife_url));
     load_config_string("ha_url", "", saved.ha_url, sizeof(saved.ha_url));
@@ -1891,6 +1911,7 @@ static bool phone_setup_screen(const network_list_t *list)
         .network_count = list->count,
         .saved = &saved,
         .ha_token_saved = saved.ha_token[0] != '\0',
+        .update_key_saved = update_key_saved,
         .save = save_phone_settings,
     };
     esp_err_t result = phone_setup_start(&config);

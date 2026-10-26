@@ -1,7 +1,7 @@
 /* Phone setup: while it runs, the board is also an open Wi-Fi access point
    with a captive web page for the network, its password, the wildlife
-   camera server and Home Assistant, so a phone can do what the on-screen
-   keyboard does. */
+   camera server, Home Assistant and the update key, so a phone can do what
+   the on-screen keyboard does. */
 #pragma once
 
 #include <stdbool.h>
@@ -19,6 +19,7 @@ typedef struct {
     char ha_url[128];
     char ha_token[256];
     char ha_sensors[PHONE_HA_SENSOR_COUNT][96];
+    char update_key[40];
 } phone_settings_t;
 
 /* Stores what the page submitted, on the web server's task. The password is
@@ -28,8 +29,10 @@ typedef bool (*phone_setup_save_fn)(const phone_settings_t *settings);
 typedef struct {
     const wifi_ap_record_t *networks; /* offered on the page, in this order */
     int network_count;
-    const phone_settings_t *saved; /* shown on the page; password and token ignored */
+    /* Shown on the page; the password, token and update key are ignored. */
+    const phone_settings_t *saved;
     bool ha_token_saved;           /* says "blank keeps the saved token" */
+    bool update_key_saved;         /* says "blank keeps the saved key" */
     phone_setup_save_fn save;
 } phone_setup_config_t;
 

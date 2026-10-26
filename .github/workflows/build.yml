@@ -1,7 +1,13 @@
-# Builds the launcher and every app under apps/. On main, each app is
-# published as firmware.bin on a release tagged with its folder name, which
-# is where the launcher looks for boot images. Other branches and pull
-# requests only build.
+# Builds the launcher and every app under apps/. On main, each one is
+# published as firmware.bin on a release tagged `launcher` or with the app's
+# folder name, which is where the launcher looks for boot images. An image
+# whose inputs (its folder, components/ and tools/cyd_version.cmake) are
+# unchanged since the commit named in its release notes is not republished,
+# so the board doesn't see a newer commit time on identical code. The notes
+# carry the commit and its time, which the board reads to decide whether to
+# install; for an existing release the asset is uploaded before the notes
+# change, so the board never pairs new notes with an old asset. Other
+# branches and pull requests only build.
 name: Build
 
 on:
@@ -51,6 +57,9 @@ jobs:
         project: ${{ fromJSON(needs.list.outputs.projects) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The version stamp and the unchanged-image test read git history.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -67,24 +76,40 @@ jobs:
         working-directory: ${{ matrix.project == 'launcher' && 'launcher' || format('apps/{0}', matrix.project) }}
         run: pio run
 
-      - name: Check it fits a launcher slot
-        if: matrix.project != 'launcher'
+      - name: Check it fits its partition
+        env:
+          PROJECT: ${{ matrix.project }}
         run: |
+          # The launcher lives in the factory partition, apps in a slot.
+          if [ "$PROJECT" = launcher ]; then limit=1310720; else limit=1376256; fi
           size=$(stat -c %s build/esp32dev/firmware.bin)
-          echo "firmware.bin is $size bytes; a slot holds 1376256"
-          test "$size" -le 1376256
+          echo "firmware.bin is $size bytes; its partition holds $limit"
+          test "$size" -le "$limit"
 
       - name: Publish firmware.bin
-        if: matrix.project != 'launcher' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ matrix.project }}
         run: |
+          if [ "$TAG" = launcher ]; then DIR=launcher; else DIR="apps/$TAG"; fi
           cp build/esp32dev/firmware.bin firmware.bin
-          notes="Boot image for apps/$TAG, built from ${GITHUB_SHA::7}."
           if gh release view "$TAG" >/dev/null 2>&1; then
+            prev=$(gh release view "$TAG" --json body --jq .body | sed -n 's/^commit: //p')
+            if [ -n "$prev" ] && git cat-file -e "$prev^{commit}" 2>/dev/null &&
+               git diff --quiet "$prev" HEAD -- "$DIR" components tools/cyd_version.cmake; then
+              echo "$TAG is unchanged since $prev; not publishing"
+              exit 0
+            fi
+            exists=1
+          else
+            exists=
+          fi
+          notes=$(printf 'Boot image for %s, built from %s.\n\ncommit: %s\ncommit-time: %s\n' \
+            "$DIR" "${GITHUB_SHA::7}" "$GITHUB_SHA" "$(git log -1 --format=%ct)")
+          if [ -n "$exists" ]; then
+            gh release upload "$TAG" firmware.bin --clobber
             gh release edit "$TAG" --notes "$notes"
           else
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
+            gh release create "$TAG" firmware.bin --target "$GITHUB_SHA" --title "$TAG" --notes "$notes"
           fi
-          gh release upload "$TAG" firmware.bin --clobber
