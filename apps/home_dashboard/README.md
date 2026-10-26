@@ -53,7 +53,7 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
 The app binary is `%USERPROFILE%\.platformio\cyd-dashboard-build\esp32dev\firmware.bin`, about 1.19 MB; the launcher's slot limit is 1,376,256 bytes. Use it in one of two ways:
 
 - **As a launcher image:** every push to `main` runs the repository's `.github/workflows/build.yml`, which builds every app and publishes this one as `firmware.bin` on the release tagged `home_dashboard`. The launcher lists that release and downloads the file. You can also write it to a slot over USB, as described in the [launcher README](../../launcher/README.md).
-- **On its own:** `& $pio run --target upload --upload-port COM11`. This replaces everything on the board, including the launcher and the settings it stored, so the app then has no settings. It uses the standalone layout in `partitions.csv`: NVS, PHY data and one 1.31 MB factory image at `0x10000`, with no launcher.
+- **Over the network:** `pio run -t upload` pushes it to the board while this app runs, signed with the update key, and the board restarts into it. See [docs/INSTALL.md](../../docs/INSTALL.md#7-put-builds-on-the-board). The app starts `cyd_update`, which keeps a new build only after 60 seconds and a drawn screen.
 
 Monitor with `& $pio device monitor --port COM11 --baud 115200`. Ctrl+] exits.
 
