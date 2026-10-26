@@ -248,7 +248,8 @@ static void send_form(httpd_req_t *request, const char *error,
         "<input name=\"ha_token\" type=\"password\" maxlength=\"255\" autocapitalize=\"none\" "
         "autocorrect=\"off\" spellcheck=\"false\">");
     if (token_saved) {
-        httpd_resp_sendstr_chunk(request, "<small>Blank keeps the saved token.</small>");
+        httpd_resp_sendstr_chunk(request, "<small>Blank keeps the saved token while the "
+                                          "address stays the same.</small>");
     }
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
         "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
@@ -349,6 +350,8 @@ static esp_err_t save_post(httpd_req_t *request)
     bool ha_url_ok = form_field(form, "ha_url", submitted.ha_url, sizeof(submitted.ha_url)) &&
                      form_url_valid(submitted.ha_url, sizeof(submitted.ha_url));
     bool token_ok = form_field(form, "ha_token", submitted.ha_token, sizeof(submitted.ha_token));
+    /* Pasting can add spaces or a newline; a token of only those counts as blank. */
+    form_trim(submitted.ha_token);
     bool sensors_ok = true;
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
         sensors_ok = form_field(form, SENSOR_KEYS[i], submitted.ha_sensors[i],

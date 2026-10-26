@@ -13,6 +13,9 @@ bool form_url_valid(char *url, size_t size);
 /* Empty, or "domain.object_id": two non-empty parts of [a-z0-9_] around one dot. */
 bool form_entity_id_valid(const char *entity_id);
 
+/* Strips leading and trailing ASCII whitespace in place. */
+void form_trim(char *text);
+
 /* True when the token field was left empty and the URL is unchanged, so the saved token stays. */
 bool form_token_kept(const char *token, const char *ha_url, const char *saved_ha_url);
 

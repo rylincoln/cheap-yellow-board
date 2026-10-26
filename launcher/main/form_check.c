@@ -65,6 +65,27 @@ bool form_entity_id_valid(const char *entity_id)
     return dots == 1 && part_length > 0;
 }
 
+/* Space, tab, newline, vertical tab, form feed or carriage return. */
+static bool is_ascii_space(char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
+/* Strips leading and trailing ASCII whitespace in place. */
+void form_trim(char *text)
+{
+    size_t start = 0;
+    while (is_ascii_space(text[start])) {
+        ++start;
+    }
+    size_t end = strlen(text + start) + start;
+    while (end > start && is_ascii_space(text[end - 1])) {
+        --end;
+    }
+    memmove(text, text + start, end - start);
+    text[end - start] = '\0';
+}
+
 /* True when the token field was left empty and the URL is unchanged, so the saved token stays. */
 bool form_token_kept(const char *token, const char *ha_url, const char *saved_ha_url)
 {
