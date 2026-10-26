@@ -89,7 +89,7 @@ The layout:
 
 There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the Home Assistant settings and the `Wildlife camera server`. The launcher saves the settings in the board's NVS storage, where every app reads them.
 
-The setup page also has an **Updates** field for the **update key**, which lets your Mac push builds to the board. The first push from the Mac gives a board that has no key its key (see section 7), so this field is for setting one by hand or changing it. The board keeps it normalized, and a blank field keeps the saved key. Without a key, the board refuses every push.
+The setup page also has an **Updates** field for the **update key**, which lets your Mac push builds to the board. The first push from the Mac gives a board that has no key its key (see section 7), so this field is for setting one by hand or changing it. The board keeps it normalized, and a blank field keeps the saved key. A board without a key refuses every push until the first one gives it a key.
 
 The home dashboard needs:
 
@@ -226,8 +226,7 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | A `sdkconfig.defaults` change has no effect | Delete `sdkconfig.esp32dev` and rebuild. |
 | CI build fails on size | The workflow checks each app's `firmware.bin` against a launcher slot, 1,376,256 bytes, and the launcher's against the factory partition, 1,310,720 bytes. Make the image smaller. |
 | `pio run -t upload` prints `busy <seconds>` | The board is installing, or is inside the 60 second window after a new build starts. The script waits and retries three times; run it again after that. |
-| `the board already has an update key` | The board's key isn't the one in `~/.config/cyd/update_key`. Enter the Mac's key on the phone setup page's Updates field. |
-| `wrong key or expired challenge` | The key on the board differs from `~/.config/cyd/update_key`, or the challenge was used up before the push arrived: something else asked the board for a challenge or pushed in between, or more than 60 seconds passed between the script's challenge request and its push. Re-enter the key and retry. |
+| `wrong key or expired challenge` | The key on the board differs from `~/.config/cyd/update_key`, or the challenge was used up before the push arrived: something else asked the board for a challenge or pushed in between, or more than 60 seconds passed between the script's challenge request and its push. Retry; if it fails again, enter the Mac's key on the phone setup page's Updates field. |
 | `no board address` | Set `CYD_HOST` or fill `~/.config/cyd/host`. |
 | `No route to host` from Python | macOS blocks that Python from the local network; the script uses `curl`, so check that `curl http://cyd-xxxx.local/update/challenge` works, and that VS Code is allowed local network access. |
 | A pushed or downloaded build vanished, and the old one runs | It rolled back: it didn't reach 60 seconds of uptime and its first screen. Read the serial log, fix the crash and push again. |

@@ -171,17 +171,17 @@ def curl(args, stdin: Optional[str] = None) -> "tuple[str, int]":
     return body.strip(), int(code) if code.isdigit() else 0
 
 
-def fetch_challenge(base: str, host: str, key: str) -> "tuple[str, int]":
+def fetch_challenge(base: str, host: str, key: str, extra=()) -> "tuple[str, int]":
     """Asks for a challenge. A board without a key is given this one first, in
     the clear: the board takes a first key from anyone on the network."""
-    reply, status = curl(["--max-time", "10", base + "/update/challenge"])
+    reply, status = curl(["--max-time", "10"] + list(extra) + [base + "/update/challenge"])
     if status == 403 and reply.startswith(NO_KEY_REPLY):
-        saved, saved_status = curl(["--max-time", "10", "--data-binary", "@-",
-                                    base + "/update/key"], stdin=key)
-        print("%s: %s" % (host, saved))
+        saved, saved_status = curl(["--max-time", "10", "--data-binary", "@-"] + list(extra)
+                                   + [base + "/update/key"], stdin=key)
         if saved_status != 200:
             return saved, saved_status
-        reply, status = curl(["--max-time", "10", base + "/update/challenge"])
+        print("%s: %s" % (host, saved))
+        reply, status = curl(["--max-time", "10"] + list(extra) + [base + "/update/challenge"])
     return reply, status
 
 
@@ -197,7 +197,7 @@ def push(firmware: str) -> int:
 
     reply, status = "", 0
     for attempt in range(MAX_BUSY_RETRIES + 1):
-        challenge, status = fetch_challenge(base, host, key)
+        challenge, status = fetch_challenge(base, host, key, extra)
         if status != 200:
             print("%s: %s" % (host, challenge))
             return 1

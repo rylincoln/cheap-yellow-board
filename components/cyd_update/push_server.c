@@ -129,6 +129,24 @@ static bool read_key(char key[KEY_SIZE])
     return result == ESP_OK && key[0] != '\0';
 }
 
+/* True only when NVS says plainly that no key is saved: a read that fails
+   for another reason mustn't let a new key in over a saved one. */
+static bool key_missing(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t result = nvs_open(CYD_CONFIG_NAMESPACE, NVS_READONLY, &nvs);
+    if (result == ESP_ERR_NVS_NOT_FOUND) {
+        return true; /* the namespace doesn't exist yet */
+    }
+    if (result != ESP_OK) {
+        return false;
+    }
+    size_t size = 0;
+    result = nvs_get_str(nvs, CYD_CONFIG_UPDATE_KEY, NULL, &size);
+    nvs_close(nvs);
+    return result == ESP_ERR_NVS_NOT_FOUND || (result == ESP_OK && size <= 1);
+}
+
 static bool write_key(const char *key)
 {
     nvs_handle_t nvs;
@@ -434,10 +452,7 @@ static esp_err_t update_post(httpd_req_t *request)
 /* POST /update/key: the first key, as the body. Taken only while none is saved. */
 static esp_err_t key_post(httpd_req_t *request)
 {
-    char key[KEY_SIZE];
-    bool have_key = read_key(key);
-    mbedtls_platform_zeroize(key, sizeof(key));
-    if (have_key) {
+    if (!key_missing()) {
         return refuse(request, STATUS_CONFLICT, REPLY_HAVE_KEY);
     }
     char body[KEY_SIZE];
