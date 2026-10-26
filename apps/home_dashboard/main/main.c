@@ -2,7 +2,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "cyd_display.h"
@@ -12,7 +11,6 @@
 #include "wildlife.h"
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
-#include "esp_check.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -39,8 +37,8 @@
 /* Settings the launcher (bootloader branch) stores in NVS for boot images,
    so no credentials are compiled into this published binary. */
 #define CONFIG_NAMESPACE "cyd_config"
-/* The wildlife camera's reply is read whole, up to this size. */
-#define WILDLIFE_JSON_CAPACITY (8 * 1024)
+/* The wildlife camera's reply is read up to this size; see http_get. */
+#define WILDLIFE_JSON_CAPACITY (16 * 1024)
 #define IMAGE_JPEG_CAPACITY (320 * 1024)
 #define JPEG_WORKBUF_SIZE 3100
 #define IMAGE_TOP 0
@@ -95,10 +93,13 @@ typedef struct {
     size_t length;
     size_t capacity;
     size_t limit;
+    /* Set at the first chunk that doesn't fit: ESP_ERR_INVALID_SIZE when the
+       reply passes limit, ESP_ERR_NO_MEM when the buffer can't grow. Every
+       later chunk is dropped, so data stays an unbroken prefix of the reply. */
+    esp_err_t stopped;
 } http_response_t;
 
 typedef struct {
-    const uint8_t *data;
     size_t length;
     size_t offset;
     esp_http_client_handle_t client;
@@ -156,7 +157,8 @@ static char ha_status[STATUS_SIZE] = "waiting for Wi-Fi";
 static char server_status[STATUS_SIZE];
 static volatile uint32_t status_changes;
 static uint32_t shown_status_changes;
-/* False when something else has been drawn over the status screen. */
+/* False until the status screen is first drawn. Nothing else is drawn
+   while it is the screen, and it never comes back once left. */
 static bool status_on_screen;
 
 static void set_stage(const char *stage)
@@ -297,9 +299,6 @@ static void draw_status(void)
     status_on_screen = true;
 }
 
-/* True while the bird info screen is up in place of the photo. */
-static bool info_on_screen;
-
 /* What the screen shows. The status page gives way to the glance screen at
    the first readings and never comes back; PHOTO, INFO and MESSAGE go back
    to the glance screen on a tap or a timeout. */
@@ -333,7 +332,7 @@ static void show_progress(const char *stage)
 /* The status of the last request that got an answer, else 0. */
 static int last_http_status;
 
-/* "visits HTTP 404", or the error without its ESP_ERR_ prefix. */
+/* "birds HTTP 404", or the error without its ESP_ERR_ prefix. */
 static void report_failure(const char *what, esp_err_t result)
 {
     if (result == ESP_FAIL && last_http_status != 0 && last_http_status != 200) {
@@ -344,18 +343,25 @@ static void report_failure(const char *what, esp_err_t result)
     }
 }
 
+/* Collects the body into response. IDF ignores this handler's return value
+   and keeps sending chunks, so stopping is sticky: the chunk that passes the
+   limit is cut at it and logged once, and every later chunk is dropped. The
+   body is then a clean prefix of the reply, cut at the capacity. */
 static esp_err_t http_event_handler(esp_http_client_event_t *event)
 {
     if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) {
         return ESP_OK;
     }
     http_response_t *response = event->user_data;
+    if (response->stopped != ESP_OK) {
+        return ESP_OK;
+    }
     size_t chunk_length = (size_t)event->data_len;
-    if (response->length > response->limit ||
-        chunk_length > response->limit - response->length) {
-        ESP_LOGE(TAG, "HTTP response exceeded %u-byte limit",
+    if (chunk_length > response->limit - response->length) {
+        ESP_LOGW(TAG, "HTTP reply is over %u bytes; keeping only those",
                  (unsigned)response->limit);
-        return ESP_ERR_INVALID_SIZE;
+        response->stopped = ESP_ERR_INVALID_SIZE;
+        chunk_length = response->limit - response->length;
     }
     size_t required = response->length + chunk_length;
     if (required > response->capacity) {
@@ -371,7 +377,8 @@ static esp_err_t http_event_handler(esp_http_client_event_t *event)
         if (new_data == NULL) {
             ESP_LOGE(TAG, "Could not grow HTTP response buffer to %u bytes",
                      (unsigned)new_capacity);
-            return ESP_ERR_NO_MEM;
+            response->stopped = ESP_ERR_NO_MEM;
+            return ESP_OK;
         }
         response->data = new_data;
         response->capacity = new_capacity;
@@ -381,6 +388,13 @@ static esp_err_t http_event_handler(esp_http_client_event_t *event)
     return ESP_OK;
 }
 
+/* GETs url, reading at most capacity bytes of the body into
+   response->data, with a NUL after them. A longer reply still returns
+   ESP_OK, with the first capacity bytes and response->stopped set to
+   ESP_ERR_INVALID_SIZE: the wildlife camera's reply puts "birds" first
+   (Flask sorts its keys), and the parser stops at the end of that array or
+   at WILDLIFE_MAX_BIRDS birds, so a cut reply still gives the newest birds.
+   Fails on a request error, a status other than 200, or no memory. */
 static esp_err_t http_get(const char *url, size_t capacity, http_response_t *response)
 {
     memset(response, 0, sizeof(*response));
@@ -416,6 +430,9 @@ static esp_err_t http_get(const char *url, size_t capacity, http_response_t *res
     if (result == ESP_OK && status != 200) {
         ESP_LOGE(TAG, "GET %s returned HTTP %d", url, status);
         result = ESP_FAIL;
+    }
+    if (result == ESP_OK && response->stopped == ESP_ERR_NO_MEM) {
+        result = ESP_ERR_NO_MEM;
     }
     esp_http_client_cleanup(client);
     if (result != ESP_OK) {
@@ -646,7 +663,6 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
         .rgb565 = rgb565,
         .buffer_capacity = output_capacity,
     };
-    status_on_screen = false;
     if (cyd_fill_rect(0, IMAGE_TOP, LCD_WIDTH, IMAGE_HEIGHT, COLOR_BLACK) != ESP_OK) {
         heap_caps_free(rgb565);
         heap_caps_free(work_buffer);
@@ -780,8 +796,6 @@ static void show_bird_info(void)
     char name[2][sizeof(latest->label)];
     char confidence[sizeof(latest->confidence) + 16];
     char heard[ALSO_HEARD_ROWS][CYD_TEXT_MAX_COLUMNS + 1];
-    info_on_screen = true;
-    status_on_screen = false;
     set_stage("showing info");
     wrap_name(latest->label, name[0], name[1], sizeof(name[0]));
     if (latest->confidence[0] != '\0') {
@@ -874,8 +888,6 @@ static void draw_glance(bool full)
 static void enter_glance(void)
 {
     screen = SCREEN_GLANCE;
-    status_on_screen = false;
-    info_on_screen = false;
     draw_glance(true);
 }
 
