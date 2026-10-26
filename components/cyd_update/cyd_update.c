@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "freertos/semphr.h"
 #include "nvs_flash.h"
+#include "push_server.h"
 #include "records.h"
 #include "update_internal.h"
 
@@ -16,6 +17,10 @@
 #define GOOD_START_US (60LL * 1000 * 1000)
 #define GOOD_START_POLL_MS 1000
 #define GOOD_START_STACK 3072
+/* Starting the push server waits on lwIP and on mDNS's low-priority task,
+   so it runs on a task of its own instead of the event task that calls
+   cyd_update_network_up. */
+#define PUSH_START_STACK 4096
 /* What update_lock asks a second update to wait. */
 #define BUSY_SECONDS 30
 /* How often update_screen_take looks whether the app has lent the screen. */
@@ -33,16 +38,20 @@ static volatile bool interruptible = true;
 /* Wi-Fi has had an address since start-up. */
 static volatile bool network_up;
 
+/* Whether the push server runs, or a task is starting it. */
+typedef enum { PUSH_SERVER_STOPPED, PUSH_SERVER_STARTING, PUSH_SERVER_RUNNING } push_server_state_t;
+
 /* Who has the screen. The app has it until an update asks; the app's
    screen task then lends it and waits in cyd_update_lend_screen until the
    update gives it back. */
 typedef enum { SCREEN_WITH_APP, SCREEN_ASKED, SCREEN_LENT } screen_state_t;
 
-/* Guards good_start_pending, updating and screen_state. */
+/* Guards good_start_pending, updating, screen_state and push_server_state. */
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool good_start_pending;
 static bool updating;
 static screen_state_t screen_state = SCREEN_WITH_APP;
+static push_server_state_t push_server_state = PUSH_SERVER_STOPPED;
 static SemaphoreHandle_t screen_returned;
 /* The percentage on the UPDATING screen, or -1 before it is drawn. Only
    the update holding the lock touches it. */
@@ -145,9 +154,36 @@ void cyd_update_screen_drawn(void)
     screen_drawn = true;
 }
 
+static void set_push_server_state(push_server_state_t state)
+{
+    portENTER_CRITICAL(&state_lock);
+    push_server_state = state;
+    portEXIT_CRITICAL(&state_lock);
+}
+
+static void push_start_task(void *argument)
+{
+    (void)argument;
+    set_push_server_state(push_server_start() == ESP_OK ? PUSH_SERVER_RUNNING
+                                                        : PUSH_SERVER_STOPPED);
+    vTaskDelete(NULL);
+}
+
+/* The first call starts the push server; a later one retries a start that failed. */
 void cyd_update_network_up(void)
 {
     network_up = true;
+    portENTER_CRITICAL(&state_lock);
+    bool start = push_server_state == PUSH_SERVER_STOPPED;
+    if (start) {
+        push_server_state = PUSH_SERVER_STARTING;
+    }
+    portEXIT_CRITICAL(&state_lock);
+    if (start && xTaskCreate(push_start_task, "push_start", PUSH_START_STACK, NULL, 1, NULL) !=
+                     pdPASS) {
+        ESP_LOGE(TAG, "The push server could not start: no memory for its task");
+        set_push_server_state(PUSH_SERVER_STOPPED);
+    }
 }
 
 void cyd_update_set_interruptible(bool value)
