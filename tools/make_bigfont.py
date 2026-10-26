@@ -26,9 +26,15 @@ OUTSIDE_ROOM = (240, 155)
 # outside_mid is the largest em at which these fit OUTSIDE_ROOM, so an
 # outside reading this wide stays larger than the inside tiles.
 OUTSIDE_MID_TEXTS = ("-10°", "100°")
-LABEL_CHARS = " " + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghijklmnopqrstuvwxyz" + "0123456789" + "-"
-NUM_CHARS = " 0123456789.-°A▲▼"
-SS = 4  # supersampling for the arrows
+LABEL_CHARS = " " + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghijklmnopqrstuvwxyz" + "0123456789" + "-%"
+NUM_CHARS = " 0123456789.-°A"
+# The battery strip's icons, drawn rather than taken from the font: the
+# draining arrow, the charging bolt, and a battery filled 0 to 10 tenths at
+# U+E000 + tenths (private use).
+BOLT = "\u26a1"
+BATTERY = 0xE000
+STRIP_CHARS = NUM_CHARS + "▼" + BOLT + "".join(chr(BATTERY + tenths) for tenths in range(11))
+SS = 4  # supersampling for the icons
 
 
 def quantise(img):
@@ -73,14 +79,30 @@ def licence(path):
     raise FileNotFoundError("LICENSE_DEJAVU is not next to %s" % path)
 
 
-def arrow(up, w, h):
+def polygon(points, w, h):
+    """Fills points, given as fractions of w and h."""
+    big = Image.new("L", (w * SS, h * SS), 0)
+    ImageDraw.Draw(big).polygon([(x * w * SS, y * h * SS) for x, y in points], fill=255)
+    return big.resize((w, h), Image.BOX)
+
+
+def battery(tenths, w, h):
+    """A battery on its side, terminal to the right, filled tenths/10 from the left."""
+    stroke = max(2, round(h * 0.11))
+    inset = stroke + max(1, round(stroke * 0.75))
+    nub_w = max(2, round(w * 0.07))
+    nub_h = round(h * 0.4)
+    nub_h += (h - nub_h) % 2  # centred on whole pixels
+    body = w - nub_w
     big = Image.new("L", (w * SS, h * SS), 0)
     d = ImageDraw.Draw(big)
-    if up:
-        pts = [(w * SS / 2, 0), (0, h * SS), (w * SS, h * SS)]
-    else:
-        pts = [(0, 0), (w * SS, 0), (w * SS / 2, h * SS)]
-    d.polygon(pts, fill=255)
+    d.rounded_rectangle([0, 0, body * SS - 1, h * SS - 1], radius=round(stroke * 1.5) * SS,
+                        outline=255, width=stroke * SS)
+    top = (h - nub_h) // 2
+    d.rectangle([body * SS, top * SS, w * SS - 1, (top + nub_h) * SS - 1], fill=255)
+    fill = round((body - 2 * inset) * SS * tenths / 10)
+    if fill > 0:
+        d.rectangle([inset * SS, inset * SS, inset * SS + fill - 1, (h - inset) * SS - 1], fill=255)
     return big.resize((w, h), Image.BOX)
 
 
@@ -96,12 +118,21 @@ def build(path, em, chars):
     pad = em
     for ch in sorted(chars, key=ord):
         code = ord(ch)
-        if ch in "▲▼":
-            w = round(0.9 * zero_adv)
+        if ch in "▼" + BOLT or BATTERY <= code <= BATTERY + 10:
+            # Icons stand on the baseline as tall as a digit.
             h = zero[3] - zero[1]
-            img = arrow(ch == "▲", w, h)
+            if ch == "▼":
+                w = round(0.9 * zero_adv)
+                img = polygon([(0, 0), (1, 0), (0.5, 1)], w, h)
+            elif ch == BOLT:
+                w = round(0.75 * h)
+                img = polygon([(0.42, 0), (1, 0), (0.7, 0.38), (1, 0.38), (0.22, 1),
+                               (0.4, 0.58), (0, 0.58)], w, h)
+            else:
+                w = round(1.9 * h)
+                img = battery(code - BATTERY, w, h)
             x_off, y_off = 0, ascent - h
-            adv = w + round(0.1 * em)
+            adv = w + round((0.2 if code >= BATTERY else 0.1) * em)
         else:
             adv = round(font.getlength(ch))
             canvas = Image.new("L", (adv + 2 * pad, line_height + 2 * pad), 0)
@@ -141,7 +172,7 @@ def main():
  *
 """
     c_header = header + """ * Glyphs are rasterised from DejaVu Sans Bold. The glyph bitmaps are derived
- * from that font; the arrows are drawn as polygons. The font's licence:
+ * from that font; the arrow, bolt and battery icons are drawn. The font's licence:
  *
 """ + "".join((" * " + line).rstrip() + "\n" for line in licence(path)) + " */\n"
     h_header = header + """ * The fonts' licence is in bigfont_data.c.
@@ -150,7 +181,7 @@ def main():
     c = [c_header, '#include "bigfont_data.h"\n']
     h = [h_header, "#ifndef BIGFONT_DATA_H\n#define BIGFONT_DATA_H\n", '#include "bigfont.h"\n']
     for name, sizes in SIZES.items():
-        chars = LABEL_CHARS if name == "label" else NUM_CHARS
+        chars = LABEL_CHARS if name == "label" else STRIP_CHARS if name == "strip" else NUM_CHARS
         for board, suffix in enumerate(("480", "320")):
             em = sizes[board]
             if em is None:

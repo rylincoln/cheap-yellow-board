@@ -24,9 +24,14 @@ typedef struct {
     glance_text_t texts[4];
 } glance_tile_t;
 
+/* A tile for each sensor up to the battery, whose tile also shows the
+   battery's charge: tiles[s] is sensor s's tile. */
+#define GLANCE_TILE_COUNT (SENSOR_BATTERY + 1)
+
 uint16_t glance_rgb(uint8_t r, uint8_t g, uint8_t b); /* RGB565 */
-/* Zeroes tiles first, so whole tiles compare with memcmp. */
-void glance_compose(int width, int height, const reading_t readings[SENSOR_COUNT],
-                    int64_t now_us, glance_tile_t tiles[SENSOR_COUNT]);
+/* Zeroes tiles first, so whole tiles compare with memcmp. show_charge
+   adds the battery's charge to its tile. */
+void glance_compose(int width, int height, const reading_t readings[SENSOR_COUNT], bool show_charge,
+                    int64_t now_us, glance_tile_t tiles[GLANCE_TILE_COUNT]);
 
 #endif

@@ -19,7 +19,7 @@
 #define SSID_MAX 32
 #define PASSWORD_MAX 64
 #define URL_MAX 127   /* home_dashboard keeps each address in 128 bytes */
-#define FORM_MAX 3072 /* every field, percent-encoded */
+#define FORM_MAX 3584 /* every field, percent-encoded */
 #define TOKEN_MAX 255
 #define DNS_PORT 53
 #define DNS_PACKET_MAX 512
@@ -253,9 +253,10 @@ static void send_form(httpd_req_t *request, const char *error,
                                           "address stays the same.</small>");
     }
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     static const char *const SENSOR_LABELS[PHONE_HA_SENSOR_COUNT] = {
-        "Upstairs", "Downstairs", "Outside", "Shop battery"};
+        "Upstairs", "Downstairs", "Outside", "Shop battery amps",
+        "Shop battery % (optional)"};
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
         httpd_resp_sendstr_chunk(request, "<label>");
         httpd_resp_sendstr_chunk(request, SENSOR_LABELS[i]);
@@ -350,7 +351,7 @@ static esp_err_t save_post(httpd_req_t *request)
     form[received] = '\0';
 
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     bool ssid_ok = form_field(form, "ssid", submitted.ssid, sizeof(submitted.ssid));
     bool password_ok = form_field(form, "pass", submitted.password, sizeof(submitted.password)) &&
                        form_password_valid(submitted.password);

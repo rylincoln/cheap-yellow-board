@@ -36,10 +36,16 @@ int main(void)
         for (int g = 1; g < f->glyph_count; g++) CHECK(f->glyphs[g - 1].code < f->glyphs[g].code);
         CHECK(bigfont_text_width(f, "~") == 0);
         CHECK(bigfont_text_width(f, "\xE2\x82") == 0); /* truncated */
-        if (i % 4 != 0) {
+        if (i % 4 == 0) {
+            CHECK(bigfont_text_width(f, "%") > 0);
+        } else {
             CHECK(bigfont_text_width(f, "\xC2\xB0") > 0);
+        }
+        if (i % 4 == 1) { /* strip: the battery strip's arrow, bolt and battery icons */
             CHECK(bigfont_text_width(f, "\xE2\x96\xBC") > 0);
-            CHECK(bigfont_text_width(f, "\xE2\x96\xB2") > 0);
+            CHECK(bigfont_text_width(f, "\xE2\x9A\xA1") > 0);
+            CHECK(bigfont_text_width(f, "\xEE\x80\x80") > 0);
+            CHECK(bigfont_text_width(f, "\xEE\x80\x8A") == bigfont_text_width(f, "\xEE\x80\x80"));
         }
     }
 
