@@ -91,3 +91,34 @@ bool form_token_kept(const char *token, const char *ha_url, const char *saved_ha
 {
     return token[0] == '\0' && strcmp(ha_url, saved_ha_url) == 0;
 }
+
+/* Rewrites an update key as the board stores it; true when blank or valid. */
+bool form_update_key_normalize(char *key)
+{
+    static const char alphabet[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    size_t length = 0;
+    for (const char *in = key; *in != '\0'; ++in) {
+        char c = *in;
+        if (c == '-' || is_ascii_space(c)) {
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        c = c == 'O' ? '0' : (c == 'I' || c == 'L') ? '1' : c;
+        key[length++] = c;
+    }
+    key[length] = '\0';
+    if (length == 0) {
+        return true;
+    }
+    if (length != 20) {
+        return false;
+    }
+    for (size_t i = 0; i < length; ++i) {
+        if (strchr(alphabet, key[i]) == NULL) {
+            return false;
+        }
+    }
+    return true;
+}

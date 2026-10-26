@@ -19,4 +19,9 @@ void form_trim(char *text);
 /* True when the token field was left empty and the URL is unchanged, so the saved token stays. */
 bool form_token_kept(const char *token, const char *ha_url, const char *saved_ha_url);
 
+/* Rewrites an update key as the board stores it: spaces and dashes dropped,
+   uppercase, O read as 0 and I or L as 1. True when the result is empty (blank
+   keeps the saved key) or 20 characters of 0-9 A-Z without I, L, O and U. */
+bool form_update_key_normalize(char *key);
+
 #endif

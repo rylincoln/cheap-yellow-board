@@ -83,6 +83,8 @@ typedef struct {
 #define CYD_BRIGHTNESS_STEP 20
 #define CYD_CONFIG_NAMESPACE "cyd_config"
 #define CYD_CONFIG_BRIGHTNESS "brightness"
+#define CYD_CONFIG_UPDATE_KEY "update_key"
+#define CYD_IMAGE_REPO "rylincoln/cheap-yellow-board"
 
 /* Initializes the LCD, clears it to black and turns on the backlight at the
    brightness saved in NVS (full brightness if none). */
