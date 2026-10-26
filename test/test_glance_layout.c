@@ -33,8 +33,8 @@ static int has(const glance_tile_t *t, const char *text, uint16_t color)
 static void worst(int w, int h)
 {
     glance_tile_t tiles[SENSOR_COUNT];
-    double temps[2] = {-12.6, 100.2};
-    for (int k = 0; k < 2; k++) {
+    double temps[4] = {-12.6, 100.2, -999.4, 999.4};
+    for (int k = 0; k < 4; k++) {
         reading_t r[SENSOR_COUNT] = {fresh(temps[k]), fresh(temps[k]), fresh(temps[k]), fresh(-153.0)};
         glance_compose(w, h, r, NOW, tiles);
         for (int s = 0; s < SENSOR_COUNT; s++) inside(&tiles[s]);
@@ -48,6 +48,38 @@ static void worst(int w, int h)
     reading_t none[SENSOR_COUNT] = {{0}};
     glance_compose(w, h, none, NOW, tiles);
     for (int s = 0; s < SENSOR_COUNT; s++) inside(&tiles[s]);
+}
+
+/* The font the outside tile gives its number when outside reads t. */
+static const bigfont_t *outside_font(int w, int h, double t)
+{
+    glance_tile_t tiles[SENSOR_COUNT];
+    reading_t r[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(t), fresh(-3.876)};
+    glance_compose(w, h, r, NOW, tiles);
+    return tiles[SENSOR_OUTSIDE].texts[1].font;
+}
+
+/* The font an inside tile gives its number when it reads t. */
+static const bigfont_t *upstairs_font(int w, int h, double t)
+{
+    glance_tile_t tiles[SENSOR_COUNT];
+    reading_t r[SENSOR_COUNT] = {fresh(t), fresh(67), fresh(40), fresh(-3.876)};
+    glance_compose(w, h, r, NOW, tiles);
+    return tiles[SENSOR_UPSTAIRS].texts[1].font;
+}
+
+/* Outside steps down outside, outside_mid, tile as its number widens, so
+   -10 and 100 stay larger than the inside tiles. Inside tiles step down
+   tile, strip. */
+static void font_chain(int w, int h, const bigfont_t *outside, const bigfont_t *mid,
+                       const bigfont_t *tile, const bigfont_t *strip)
+{
+    CHECK(outside_font(w, h, 47) == outside);
+    CHECK(outside_font(w, h, -10) == mid);
+    CHECK(outside_font(w, h, 100) == mid);
+    CHECK(outside_font(w, h, -100) == tile);
+    CHECK(upstairs_font(w, h, 66) == tile);
+    CHECK(upstairs_font(w, h, -999) == strip);
 }
 
 int main(void)
@@ -73,6 +105,11 @@ int main(void)
     CHECK(tiles[SENSOR_BATTERY].rect.x == 3 && tiles[SENSOR_BATTERY].rect.y == 183);
     CHECK(tiles[SENSOR_BATTERY].rect.w == 315 && tiles[SENSOR_BATTERY].rect.h == 54);
     CHECK(tiles[SENSOR_UPSTAIRS].texts[1].font == &bigfont_tile_320);
+
+    font_chain(480, 320, &bigfont_outside_480, &bigfont_outside_mid_480, &bigfont_tile_480,
+               &bigfont_strip_480);
+    font_chain(320, 240, &bigfont_outside_320, &bigfont_outside_mid_320, &bigfont_tile_320,
+               &bigfont_strip_320);
 
     worst(480, 320);
     worst(320, 240);

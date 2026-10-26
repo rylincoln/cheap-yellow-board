@@ -42,12 +42,16 @@ static void add_text(glance_tile_t *tile, const bigfont_t *font, const char *tex
     t->color = color;
 }
 
+/* A label and a number. The number takes the largest font that fits:
+   Outside steps down outside, outside_mid, tile, strip, and the inside
+   tiles start at tile. */
 static void temperature_tile(glance_tile_t *tile, sensor_t sensor, bool small_panel,
                              const reading_t *reading, int64_t now_us)
 {
     const bigfont_t *label_font = small_panel ? &bigfont_label_320 : &bigfont_label_480;
-    const bigfont_t *fonts[3] = {
+    const bigfont_t *fonts[4] = {
         small_panel ? &bigfont_outside_320 : &bigfont_outside_480,
+        small_panel ? &bigfont_outside_mid_320 : &bigfont_outside_mid_480,
         small_panel ? &bigfont_tile_320 : &bigfont_tile_480,
         small_panel ? &bigfont_strip_320 : &bigfont_strip_480,
     };
@@ -59,9 +63,8 @@ static void temperature_tile(glance_tile_t *tile, sensor_t sensor, bool small_pa
     add_text(tile, label_font, labels[sensor], r->x + (r->w - bigfont_text_width(label_font, labels[sensor])) / 2,
              r->y + (small_panel ? 4 : 6), glance_rgb(0x9A, 0x9A, 0x9A));
 
-    int first = sensor == SENSOR_OUTSIDE ? 0 : 1;
-    int pick = first;
-    while (pick < 2 && bigfont_text_width(fonts[pick], number) > r->w - TILE_PAD) pick++;
+    int pick = sensor == SENSOR_OUTSIDE ? 0 : 2;
+    while (pick < 3 && bigfont_text_width(fonts[pick], number) > r->w - TILE_PAD) pick++;
     const bigfont_t *font = fonts[pick];
 
     int space_top = tile->texts[0].line_y + label_font->line_height;
