@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cyd_display.h"
+#include "cyd_update.h"
 #include "glance.h"
 #include "ha_client.h"
 #include "readings.h"
@@ -46,6 +47,8 @@
 /* Notification bits for the dashboard task. */
 #define TAP_BIT BIT0
 #define WIFI_JOINED_BIT BIT1
+/* An update wants the screen; see cyd_update_lend_screen. */
+#define UPDATE_BIT BIT2
 /* A tap on the photo shows the bird's details this long, or until the next tap. */
 #define INFO_TIMEOUT_US (30LL * 1000 * 1000)
 /* The photo, and a message saying why there is none, give way to the glance
@@ -884,10 +887,12 @@ static void draw_glance(bool full)
     glance_composed_us = now;
 }
 
-/* Shows the glance screen, drawn in full. */
+/* Shows the glance screen, drawn in full. An update from GitHub may take
+   the screen from here. */
 static void enter_glance(void)
 {
     screen = SCREEN_GLANCE;
+    cyd_update_set_interruptible(true);
     draw_glance(true);
 }
 
@@ -896,6 +901,7 @@ static void enter_timed_screen(screen_t next, int64_t timeout_us)
 {
     screen = next;
     screen_until_us = esp_timer_get_time() + timeout_us;
+    cyd_update_set_interruptible(false);
 }
 
 /* Clears the screen to two lines of text on rows 4 and 5. */
@@ -918,6 +924,9 @@ static void show_message(const char *first, const char *second)
    bird. */
 static void show_bird_for_tap(void)
 {
+    /* The readings are gone from here on, though the timed screen starts
+       only once the bird is found. */
+    cyd_update_set_interruptible(false);
     draw_lines(CYD_COLOR_WHITE, "finding the", "latest bird");
     if (!wifi_connected) {
         show_message("NO WI-FI", "");
@@ -1014,6 +1023,7 @@ static void wifi_event_handler(void *argument, esp_event_base_t event_base,
         attempts = 0;
         set_wifi_status(IPSTR, IP2STR(&event->ip_info.ip));
         ESP_LOGI(TAG, "Wi-Fi connected; IP address: " IPSTR, IP2STR(&event->ip_info.ip));
+        cyd_update_network_up();
         if (app_task_handle != NULL) {
             xTaskNotify(app_task_handle, WIFI_JOINED_BIT, eSetBits);
         }
@@ -1131,6 +1141,23 @@ static int64_t sooner(int64_t wake_us, int64_t deadline_us, int64_t now)
     return deadline_us > now && deadline_us < wake_us ? deadline_us : wake_us;
 }
 
+/* Puts the screen back in full after an update has drawn over it. A timed
+   screen isn't worth bringing back. */
+static void redraw_after_update(void)
+{
+    switch (screen) {
+    case SCREEN_STATUS:
+        draw_status();
+        break;
+    case SCREEN_GLANCE:
+        draw_glance(true);
+        break;
+    default:
+        enter_glance();
+        break;
+    }
+}
+
 /* Runs the screens. Home Assistant is asked on joining Wi-Fi and every
    HA_INTERVAL_US while the status page or the glance screen is up. A tap on
    the glance screen shows the latest bird, a tap on the photo its details,
@@ -1140,6 +1167,8 @@ static void dashboard_task(void *argument)
     (void)argument;
     app_task_handle = xTaskGetCurrentTaskHandle();
     int64_t next_fetch_us = 0;
+    update_status_screen();
+    cyd_update_screen_drawn();
     while (true) {
         update_status_screen();
         bool timed = screen == SCREEN_PHOTO || screen == SCREEN_INFO || screen == SCREEN_MESSAGE;
@@ -1182,6 +1211,13 @@ static void dashboard_task(void *argument)
         }
         if ((events & WIFI_JOINED_BIT) && screen == SCREEN_STATUS) {
             next_fetch_us = 0;
+        }
+        if (events & UPDATE_BIT) {
+            cyd_update_lend_screen();
+            redraw_after_update();
+            /* Taps made on the update's screen are dropped. */
+            ulTaskNotifyValueClear(NULL, TAP_BIT);
+            events &= ~TAP_BIT;
         }
         if (events & TAP_BIT) {
             switch (screen) {
@@ -1226,5 +1262,11 @@ void app_main(void)
     BaseType_t dashboard_task_result =
         xTaskCreate(dashboard_task, "dashboard", 8192, NULL, 5, &app_task_handle);
     ESP_ERROR_CHECK(dashboard_task_result == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    const cyd_update_config_t update_config = {
+        .label = "dashboard",
+        .screen_task = app_task_handle,
+        .screen_bit = UPDATE_BIT,
+    };
+    ESP_ERROR_CHECK(cyd_update_init(&update_config));
     wifi_init();
 }
