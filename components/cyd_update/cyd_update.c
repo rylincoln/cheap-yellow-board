@@ -47,11 +47,15 @@ typedef enum { PUSH_SERVER_STOPPED, PUSH_SERVER_STARTING, PUSH_SERVER_RUNNING } 
    update gives it back. */
 typedef enum { SCREEN_WITH_APP, SCREEN_ASKED, SCREEN_LENT } screen_state_t;
 
-/* Guards good_start_pending, updating, screen_state and push_server_state. */
+/* Guards good_start_pending, updating, screen_state, screen_used and
+   push_server_state. */
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool good_start_pending;
 static bool updating;
 static screen_state_t screen_state = SCREEN_WITH_APP;
+/* The update has drawn on the screen since the app lent it, so the app
+   must redraw when it gets it back. */
+static bool screen_used;
 static push_server_state_t push_server_state = PUSH_SERVER_STOPPED;
 static SemaphoreHandle_t screen_returned;
 /* The percentage on the UPDATING screen, or -1 before it is drawn. Only
@@ -230,7 +234,7 @@ bool update_lock(int *busy_seconds)
 }
 
 /* Hands the screen back to the app, or withdraws a request it hasn't
-   answered yet; the app redraws either way. */
+   answered yet. The app redraws only if the update drew on it. */
 static void give_back_screen(void)
 {
     portENTER_CRITICAL(&state_lock);
@@ -286,18 +290,35 @@ bool update_screen_take(uint32_t wait_ms)
     return true;
 }
 
-void cyd_update_lend_screen(void)
+/* False when the request was withdrawn before the app got to it, or the
+   update gave the screen back without drawing: the app's screen is as it
+   left it. */
+bool cyd_update_lend_screen(void)
 {
     bool lend = false;
     portENTER_CRITICAL(&state_lock);
     if (screen_state == SCREEN_ASKED) {
         screen_state = SCREEN_LENT;
+        screen_used = false;
         lend = true;
     }
     portEXIT_CRITICAL(&state_lock);
-    if (lend) {
-        xSemaphoreTake(screen_returned, portMAX_DELAY);
+    if (!lend) {
+        return false;
     }
+    xSemaphoreTake(screen_returned, portMAX_DELAY);
+    portENTER_CRITICAL(&state_lock);
+    bool used = screen_used;
+    portEXIT_CRITICAL(&state_lock);
+    return used;
+}
+
+/* After drawing, so the app knows to redraw when it gets the screen back. */
+static void note_screen_used(void)
+{
+    portENTER_CRITICAL(&state_lock);
+    screen_used = true;
+    portEXIT_CRITICAL(&state_lock);
 }
 
 typedef struct {
@@ -340,6 +361,7 @@ void update_screen_progress(const char *label, const char *source, int percent)
         cyd_text_row(4, CYD_COLOR_WHITE, CYD_COLOR_BLACK, amount);
     }
     shown_percent = percent;
+    note_screen_used();
 }
 
 void update_screen_finish(const char *title, const char *detail, uint32_t show_ms, bool restarting)
@@ -361,6 +383,7 @@ void update_screen_finish(const char *title, const char *detail, uint32_t show_m
             line = end + 1;
         }
         draw_screen(rows);
+        note_screen_used();
         vTaskDelay(pdMS_TO_TICKS(show_ms));
     }
     if (!restarting) {

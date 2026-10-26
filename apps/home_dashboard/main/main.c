@@ -1212,8 +1212,9 @@ static void dashboard_task(void *argument)
         if ((events & WIFI_JOINED_BIT) && screen == SCREEN_STATUS) {
             next_fetch_us = 0;
         }
-        if (events & UPDATE_BIT) {
-            cyd_update_lend_screen();
+        /* An update that drew nothing leaves the screen, a bird photo
+           say, and any tap alone. */
+        if ((events & UPDATE_BIT) && cyd_update_lend_screen()) {
             redraw_after_update();
             /* Taps made on the update's screen are dropped. */
             ulTaskNotifyValueClear(NULL, TAP_BIT);

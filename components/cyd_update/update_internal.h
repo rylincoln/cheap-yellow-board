@@ -18,7 +18,7 @@
 #define UPDATE_FAILED_MS 3000
 
 bool update_lock(int *busy_seconds);  /* false during the good-start window (60 s minus uptime, at least 1) or another update (30) */
-void update_unlock(void);             /* also gives the screen back, or withdraws the request for it */
+void update_unlock(void);             /* also gives the screen back, or withdraws the request for it; the app redraws only if the update drew */
 bool update_screen_take(uint32_t wait_ms);  /* asks screen_task for the screen; true once lent */
 void update_screen_progress(const char *label, const char *source, int percent); /* source "Mac" or "GitHub"; draws only while lent */
 /* Shows a closing screen for show_ms while lent, then gives the screen back
