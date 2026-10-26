@@ -8,7 +8,7 @@ Every app builds a binary that runs in either launcher slot. They all use one co
 
 ## How it boots
 
-On power-on, including the EN button, the custom bootloader (`bootloader_components/main`) always starts the launcher. Any other reset, such as the launcher's own restart or an image crashing, goes straight back to the chosen image. If the launcher's image doesn't verify, a power-on starts the chosen image instead.
+On power-on, including the EN button, the custom bootloader (`bootloader_components/main`) starts the launcher, or the chosen image if the launcher's image doesn't verify. Any other reset, such as the launcher's own restart or an image crashing, goes straight back to the chosen image.
 
 1. On the very first start, or whenever no network is saved, the Wi-Fi network chooser opens first (see below); the menu and its countdown follow once it closes.
 2. The menu immediately lists the stored images, marking the default with `*`, and counts down from 20 seconds. It shows seven entries at a time: the row below them says which (such as `1-7/9`), and its ▲ and ▼ buttons page through the rest.

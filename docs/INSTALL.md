@@ -43,7 +43,7 @@ The repository uses short paths, but Git's own internals can still pass 260 char
 2. In VS Code, open **Extensions**, search for **PlatformIO IDE**, and install it. On first start it installs **PlatformIO Core** into `%USERPROFILE%\.platformio\penv`. This takes a few minutes, and it finds or downloads a suitable Python itself.
 3. When you open the repository, or a project folder in it, VS Code recommends this extension, from `.vscode/extensions.json`. That file also tells VS Code *not* to suggest the C/C++ extension pack or `pioarduino`, which would conflict with PlatformIO's own setup.
 
-The `pio` command lives at `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`. The docs call it by that full path, so it works even when `pio` isn't on your PATH. To type plain `pio` instead, add `%USERPROFILE%\.platformio\penv\Scripts` to your user PATH. The VS Code tasks in `.vscode/tasks.json` (Build, Upload, Monitor) assume `pio` is on the PATH.
+The `pio` command lives at `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`. The docs call it by that full path, so it works even when `pio` isn't on your PATH. To type plain `pio` instead, add `%USERPROFILE%\.platformio\penv\Scripts` to your user PATH.
 
 ### Option B: PlatformIO Core on its own (no VS Code)
 
@@ -137,7 +137,7 @@ There are two ways: over Wi-Fi, which is the everyday route, and over USB with e
 `pio run -t upload`, run in `launcher/` or an app folder, sends the built `firmware.bin` to the board over HTTP. The script is `tools/cyd_push.py`. It needs Python 3.9 or newer and `curl`, and it signs each push with the update key, so no key crosses the network. Three things must be in place:
 
 1. **The board's address.** The board announces itself as `cyd-xxxx.local`, where `xxxx` is the last four hex digits of its Wi-Fi MAC address; the launcher's bottom row shows its IP address too. There is no default. Set `CYD_HOST` (for example `export CYD_HOST=cyd-xxxx.local`), or put the address on the first line of `~/.config/cyd/host`.
-2. **The update key.** Run `python3 tools/cyd_push.py --new-key` once. It saves a key to `~/.config/cyd/update_key` with mode 600, or to the file `CYD_KEY_FILE` names, and copies it to the clipboard. It refuses to overwrite an existing key unless you add `--force`. Paste the key into the Updates field of the board's phone setup page. The script refuses a key file that others can read.
+2. **The update key.** Run `python3 tools/cyd_push.py --new-key` once. It saves a key to `~/.config/cyd/update_key` with mode 600, or to the file `CYD_KEY_FILE` names, and on macOS copies it to the clipboard with `pbcopy`. It refuses to overwrite an existing key unless you add `--force`. Paste the key into the Updates field of the board's phone setup page. The script refuses a key file that others can read.
 3. **A board running an app that has `cyd_update`.** The running app takes the push, not the launcher's menu, so let the launcher's countdown boot the app first. A board with older images needs the one-time USB step below.
 
 ```bash
@@ -145,9 +145,11 @@ cd apps/home_dashboard
 USERPROFILE="$HOME" ~/.platformio/penv/bin/pio run -t upload
 ```
 
-The board shows `UPDATING`, a percentage, then `RESTARTING`, and the new build starts. A pushed launcher image (project `cyd_launcher`) is written to the factory partition while an app runs, and takes effect at the next power-on; the board shows `LAUNCHER UPDATED`. If the board answers `busy <seconds>`, the script waits and tries again, up to three times. Set `CYD_CURL_EXTRA` to pass extra options to curl, for example `--interface`. The script never prints the key, and an agent must not run `--show-key`.
+The board shows `UPDATING`, a percentage, then `RESTARTING`, and the new build starts. A pushed launcher image (project `cyd_launcher`) is written to the factory partition while an app runs, and takes effect at the next power-on; the board shows `LAUNCHER UPDATED`. If the board answers `busy <seconds>`, the script waits and tries again, up to three times. The board takes one push at a time, so a second push sent while it installs an app usually fails with a connection reset (`curl failed`) instead: the board restarts into the new app before answering it. Nothing is harmed; push again once the new build is up. Set `CYD_CURL_EXTRA` to pass extra options to curl, for example `--interface`. The script never prints the key, and an agent must not run `--show-key`.
 
-A pushed build is on trial. The board keeps it only after 60 seconds of uptime and a first drawn screen. A build that crashes or restarts before then is rolled back to the build before it, and the launcher then skips that slot in its menu. The same applies to a launcher image that fails to verify: on power-on the bootloader starts the app that `otadata` selects instead. Fix a bad launcher over USB.
+A pushed build is on trial. The board keeps it only after 60 seconds of uptime and a first drawn screen. A build that crashes or restarts before then, including a power-cycle in its first minute, has failed its start and is rolled back to the build before it. The launcher still lists that slot, but its countdown no longer defaults to it.
+
+A launcher image has no trial. If it doesn't verify, the bootloader starts the app that `otadata` selects at power-on instead. While that app runs, a push of a good launcher or the next `launcher` release from GitHub replaces the bad one; USB works too.
 
 New apps must link `cyd_update` (see `apps/home_dashboard` for how it is started), or call `esp_ota_mark_app_valid_cancel_rollback()` themselves. Otherwise they roll back at their next restart.
 
@@ -174,9 +176,11 @@ $L = "$env:USERPROFILE\.platformio\cyd-launcher-build\esp32dev"
 
 Leave out the partition table (`0x8000`, unchanged) and `ota_data_initial.bin`, so `otadata` keeps selecting that slot. Then enter the update key on the phone setup page, or `pio run -t upload` reports `no update key on the board`.
 
+Until a board has had this step, its old launcher lists the `launcher` release as an app. Don't tap it there: it would put the launcher image in an app slot.
+
 ### Over USB: a new board, or recovery
 
-The launcher needs its own bootloader, partition table and a blank `otadata`. Flashing all of them explicitly with **esptool**, at these offsets, is the verified way. Don't use `pio run --target upload` in `launcher/` for this: with `upload_protocol = custom` it pushes over the network and never touches a bootloader. This erases the whole board, including the Wi-Fi settings and the update key:
+The launcher needs its own bootloader, partition table and a blank `otadata`. Flashing all of them explicitly with **esptool**, at these offsets, is the verified way. Delete the project's `sdkconfig.esp32dev` before building an image for USB: the board takes the floor for a USB-flashed image from the commit time stamped in its version, and that stamp is refreshed only when CMake runs again. Don't use `pio run --target upload` in `launcher/` for this: with `upload_protocol = custom` it pushes over the network and never touches a bootloader. This erases the whole board, including the Wi-Fi settings and the update key:
 
 ```powershell
 & $py $esptool --chip esp32 -p COM11 erase_flash
@@ -202,7 +206,7 @@ To put a locally built app into a slot without GitHub or the network, write its 
 
 ### Updates from GitHub
 
-With a network up, the running app checks the `launcher` release and the release for its own project when the network comes up and then every hour, at least 5 minutes apart. A release installs by itself when its notes' commit time is above 0 and above the image's floor, the commit time already installed or seen. After an install the floor is the release's commit time, so a release that then fails its good start isn't tried again. A Mac push or a USB flash also raises the floor, so an older release never replaces a newer local build. The floor never blocks a Mac push.
+With a network up, the running app checks the `launcher` release and the release for its own project when the network comes up and then every hour, at least 5 minutes apart. A release installs by itself when its notes' commit time is above 0 and above the image's floor, the commit time already installed or seen. After an install the floor is the release's commit time, so a release that then fails its good start isn't tried again. A Mac push or a USB flash also sets the floor, to its own commit time or the last release commit time the board has seen, whichever is later, so an older release never replaces a newer local build. A release published since the board's last check isn't counted yet, so a push from a checkout behind the latest release can be replaced at the next hourly check. The floor never blocks a Mac push.
 
 ## 8. Publish a new or changed application
 
@@ -220,14 +224,14 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | esptool: `The chip stopped responding` | Retry at a lower baud rate, such as `-b 115200`. Use a short, good USB cable. |
 | esptool can't open the port | Close any serial monitor, or other program, using the COM port. |
 | A `sdkconfig.defaults` change has no effect | Delete `sdkconfig.esp32dev` and rebuild. |
-| CI build fails on size | The workflow checks each app's `firmware.bin` against a launcher slot, 1,376,256 bytes. Make the app smaller. |
+| CI build fails on size | The workflow checks each app's `firmware.bin` against a launcher slot, 1,376,256 bytes, and the launcher's against the factory partition, 1,310,720 bytes. Make the image smaller. |
 | `pio run -t upload` prints `busy <seconds>` | The board is installing, or is inside the 60 second window after a new build starts. The script waits and retries three times; run it again after that. |
 | `no update key on the board` | Enter the key on the phone setup page's Updates field. `python3 tools/cyd_push.py --new-key` makes one. |
-| `wrong key or expired challenge` | The key on the board differs from `~/.config/cyd/update_key`, or the push took over 60 seconds. Re-enter the key and retry. |
+| `wrong key or expired challenge` | The key on the board differs from `~/.config/cyd/update_key`, or the challenge was used up before the push arrived: something else asked the board for a challenge or pushed in between, or more than 60 seconds passed between the script's challenge request and its push. Re-enter the key and retry. |
 | `no board address` | Set `CYD_HOST` or fill `~/.config/cyd/host`. |
 | `No route to host` from Python | macOS blocks that Python from the local network; the script uses `curl`, so check that `curl http://cyd-xxxx.local/update/challenge` works, and that VS Code is allowed local network access. |
 | A pushed or downloaded build vanished, and the old one runs | It rolled back: it didn't reach 60 seconds of uptime and its first screen. Read the serial log, fix the crash and push again. |
-| The launcher is bad (power-on starts the app instead) | The bootloader found the launcher invalid. Flash `bootloader.bin` and the launcher's `firmware.bin` over USB, as in section 7. |
+| The launcher is bad (power-on starts the app instead) | The bootloader found the launcher invalid. While the app runs, push a good launcher with `pio run -t upload` in `launcher/`, or let the next `launcher` release install; or flash `bootloader.bin` and the launcher's `firmware.bin` over USB, as in section 7. |
 | Touches land in the wrong place | The built-in calibration is used, and a calibration saved earlier is still applied. |
 
 ## Tested versions
