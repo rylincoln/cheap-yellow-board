@@ -2,7 +2,7 @@
 
 PlatformIO/ESP-IDF application for the 320x240 or 480x320 display and resistive touchscreen on the ESP32 Cheap Yellow Display (CYD), following the [board documentation](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display).
 
-It is one of the apps in this repository. The [root README](../../README.md) lists them all and the launcher that runs them.
+It is the only app in this repository so far. The [root README](../../README.md) describes the launcher that runs it.
 
 ## What it does
 
@@ -28,9 +28,13 @@ The app has no credentials compiled in, so its binary is safe to publish. It rea
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Sensor entity IDs, such as `sensor.some_name` |
 | `wildlife_url` | Wildlife camera gallery, for example `http://192.168.1.50:8080` |
 
-Create the token at the bottom of the Home Assistant user's profile page, under Security, as a long-lived access token. The readings come from `POST /api/template`, which only admin users may call. A non-admin token shows `HA 401 bad token`, even though it can read `/api/states`.
+Create the token at the bottom of the Home Assistant user's profile page, under Security, as a long-lived access token. The readings come from `POST /api/template`, which only admin users may call. A non-admin token shows `HA 401 bad token`, even though it can read `/api/states`. The token is therefore a full admin credential, sent in cleartext unless `ha_url` is `https`, so consider a dedicated admin user for the board.
+
+Home Assistant 2024.3 or newer is needed: the readings age by each sensor's `last_reported` time.
 
 `wildlife_url` replaces the old BirdNET server setting; the launcher erases that key when the phone page saves.
+
+An older launcher's phone page lacks the Home Assistant and wildlife camera fields. Flash the current launcher first: write only its `firmware.bin` to `0x10000`, without erasing, as the [launcher README](../../launcher/README.md#settings-for-boot-images) describes.
 
 Without Wi-Fi settings, the screen says so. Press EN to open the launcher, which starts its Wi-Fi setup when no network is saved, then boot the app again. The app uses:
 
@@ -46,7 +50,7 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
 & $pio run
 ```
 
-The app binary is `%USERPROFILE%\.platformio\cyd-dashboard-build\esp32dev\firmware.bin`, about 1.15 MB; the launcher's slot limit is 1,376,256 bytes. Use it in one of two ways:
+The app binary is `%USERPROFILE%\.platformio\cyd-dashboard-build\esp32dev\firmware.bin`, about 1.19 MB; the launcher's slot limit is 1,376,256 bytes. Use it in one of two ways:
 
 - **As a launcher image:** every push to `main` runs the repository's `.github/workflows/build.yml`, which builds every app and publishes this one as `firmware.bin` on the release tagged `home_dashboard`. The launcher lists that release and downloads the file. You can also write it to a slot over USB, as described in the [launcher README](../../launcher/README.md).
 - **On its own:** `& $pio run --target upload --upload-port COM11`. This replaces everything on the board, including the launcher and the settings it stored, so the app then has no settings. It uses the standalone layout in `partitions.csv`: NVS, PHY data and one 1.31 MB factory image at `0x10000`, with no launcher.

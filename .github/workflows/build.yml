@@ -42,7 +42,8 @@ jobs:
           echo "projects=$list" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: list
+    # A failed host test stops every build, and with it the release.
+    needs: [host-tests, list]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

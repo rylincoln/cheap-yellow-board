@@ -86,11 +86,11 @@ The layout:
 
 ## 5. Wi-Fi settings live on the board
 
-There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the Home Assistant settings and the wildlife camera server. The launcher saves the settings in the board's NVS storage, where every app reads them.
+There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the Home Assistant settings and the `Wildlife camera server`. The launcher saves the settings in the board's NVS storage, where every app reads them.
 
 The home dashboard needs:
 
-- **Home Assistant address and token.** For example `http://homeassistant.local:8123`. Create the token at the bottom of your Home Assistant user's profile page, under Security, as a long-lived access token. The token must belong to an admin user: the dashboard reads through `POST /api/template`, which is admin-only, and a non-admin token shows `HA 401 bad token`.
+- **Home Assistant address and token.** For example `http://homeassistant.local:8123`. Create the token at the bottom of your Home Assistant user's profile page, under Security, as a long-lived access token. The token must belong to an admin user: the dashboard reads through `POST /api/template`, which is admin-only, and a non-admin token shows `HA 401 bad token`. That makes it a full admin credential, sent in cleartext unless the address is `https`, so consider a dedicated admin user for the board. Home Assistant 2024.3 or newer is needed.
 - **Four sensor IDs.** The entity IDs for upstairs, downstairs, outside and the battery current, such as `sensor.some_name`.
 - **Wildlife camera server.** The address of your wildlife-cam gallery, for example `http://192.168.1.50:8080`. Tapping the readings shows its latest bird.
 
@@ -112,6 +112,8 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe"
 ```
 
 On macOS or Linux, set `USERPROFILE` for the build folder in `platformio.ini`: `USERPROFILE="$HOME" ~/.platformio/penv/bin/pio run`.
+
+The pure C modules also have host tests. From the repository root, `sh test/run.sh` builds and runs them with the system C compiler (`cc`); on Windows, use WSL or another POSIX shell with a compiler. CI runs them before it builds anything.
 
 What to expect:
 
@@ -167,7 +169,7 @@ The workflow needs the repository's Actions to have **read and write** permissio
 | esptool: `The chip stopped responding` | Retry at a lower baud rate, such as `-b 115200`. Use a short, good USB cable. |
 | esptool can't open the port | Close any serial monitor, or other program, using the COM port. |
 | A `sdkconfig.defaults` change has no effect | Delete `sdkconfig.esp32dev` and rebuild. |
-| CI build fails on size | The workflow checks against the default 1 MB app partition. Keep standalone builds under 1 MB, or point the check at the launcher's partition table. |
+| CI build fails on size | The workflow checks each app's `firmware.bin` against a launcher slot, 1,376,256 bytes. Make the app smaller. |
 | Touches land in the wrong place | The built-in calibration is used, and a calibration saved earlier is still applied. |
 
 ## Tested versions

@@ -6,4 +6,5 @@
 - `.github/workflows/build.yml` builds every project and, on `main`, publishes each app on a release tagged with its folder name. An app's `project()` name must match its folder.
 - No binary contains credentials. Wi-Fi, Home Assistant and wildlife camera settings live in NVS namespace `cyd_config`, set by the launcher's network chooser or its phone setup (`launcher/main/phone_setup.c`).
 - Flash the launcher with esptool at the offsets in `launcher/README.md`, never `pio run --target upload`.
-- Keep the launcher under 1.25 MB and apps under 1.31 MB. Verify changes with a PlatformIO build before flashing.
+- `sh test/run.sh` builds and runs the host tests of the pure C modules (`launcher/main/form_check.c` and the dashboard's readings, fonts, layout and wildlife parser) with the system compiler. `tools/make_bigfont.py` regenerates `apps/home_dashboard/main/bigfont_data.c`.
+- Keep the launcher under 1.25 MB and apps under 1.31 MB. Verify changes with the host tests and a PlatformIO build before flashing.
