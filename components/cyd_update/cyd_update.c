@@ -8,6 +8,7 @@
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
+#include "github_check.h"
 #include "nvs_flash.h"
 #include "push_server.h"
 #include "records.h"
@@ -169,7 +170,9 @@ static void push_start_task(void *argument)
     vTaskDelete(NULL);
 }
 
-/* The first call starts the push server; a later one retries a start that failed. */
+/* The first call starts the push server and the GitHub check. A later one
+   retries a push server start that failed, and wakes the check so that a
+   reconnect checks without waiting out the hour. */
 void cyd_update_network_up(void)
 {
     network_up = true;
@@ -183,6 +186,10 @@ void cyd_update_network_up(void)
                      pdPASS) {
         ESP_LOGE(TAG, "The push server could not start: no memory for its task");
         set_push_server_state(PUSH_SERVER_STOPPED);
+    }
+    esp_err_t result = github_check_start();
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "The GitHub check could not start: %s", esp_err_to_name(result));
     }
 }
 
