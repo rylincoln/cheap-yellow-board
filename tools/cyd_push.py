@@ -156,8 +156,10 @@ def commit_time() -> int:
 
 def curl(args) -> "tuple[str, int]":
     """Runs curl; returns the reply text and HTTP status."""
+    # --ipv4: the board has no IPv6 address, and macOS waits 5 s for an AAAA
+    # answer for a .local name before it settles for the IPv4 one.
     try:
-        done = subprocess.run(["curl", "-sS"] + list(args) + ["-w", "\n%{http_code}"],
+        done = subprocess.run(["curl", "-sS", "--ipv4"] + list(args) + ["-w", "\n%{http_code}"],
                               capture_output=True, text=True)
     except OSError:
         raise RuntimeError("curl was not found on PATH")
