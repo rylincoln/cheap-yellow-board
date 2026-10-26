@@ -29,4 +29,6 @@ build/host-tests/image_desc
 cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update -Icomponents/json_scan/include test/test_update_rules.c components/cyd_update/update_rules.c components/json_scan/json_scan.c -o build/host-tests/update_rules
 build/host-tests/update_rules
 
+python3 tools/test_cyd_push.py
+
 echo "host tests passed"
