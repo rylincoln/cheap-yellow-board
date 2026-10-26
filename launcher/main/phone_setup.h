@@ -1,6 +1,7 @@
 /* Phone setup: while it runs, the board is also an open Wi-Fi access point
-   with a captive web page for the network, its password, the BirdNET server
-   and Home Assistant, so a phone can do what the on-screen keyboard does. */
+   with a captive web page for the network, its password, the wildlife
+   camera server and Home Assistant, so a phone can do what the on-screen
+   keyboard does. */
 #pragma once
 
 #include <stdbool.h>
@@ -14,7 +15,7 @@
 typedef struct {
     char ssid[33];
     char password[65];
-    char birdnet_url[128];
+    char wildlife_url[128];
     char ha_url[128];
     char ha_token[256];
     char ha_sensors[PHONE_HA_SENSOR_COUNT][96];

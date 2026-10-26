@@ -288,7 +288,8 @@ static bool store_or_erase(nvs_handle_t nvs, const char *key, const char *value)
    image. The page never shows the saved password or token, so a blank
    password keeps it when the network stays the same, and a blank token when
    the Home Assistant address does. A blank server, address or sensor goes
-   back to unset. Runs on the web server's task. */
+   back to unset, and the BirdNET viewer's old server setting is erased.
+   Runs on the web server's task. */
 static bool save_phone_settings(const phone_settings_t *settings)
 {
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
@@ -308,7 +309,8 @@ static bool save_phone_settings(const phone_settings_t *settings)
         nvs_open(CONFIG_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
         return false;
     }
-    bool stored = store_or_erase(nvs, "birdnet_url", settings->birdnet_url) &&
+    bool stored = store_or_erase(nvs, "wildlife_url", settings->wildlife_url) &&
+                  store_or_erase(nvs, "birdnet_url", "") &&
                   store_or_erase(nvs, "ha_url", settings->ha_url);
     if (stored && !form_token_kept(settings->ha_token, settings->ha_url, saved_ha_url)) {
         stored = store_or_erase(nvs, "ha_token", settings->ha_token);
@@ -1878,7 +1880,7 @@ static bool phone_setup_screen(const network_list_t *list)
     static phone_settings_t saved; /* the page keeps its own copy */
     char ssid[33];
     load_config_string("wifi_ssid", "", saved.ssid, sizeof(saved.ssid));
-    load_config_string("birdnet_url", "", saved.birdnet_url, sizeof(saved.birdnet_url));
+    load_config_string("wildlife_url", "", saved.wildlife_url, sizeof(saved.wildlife_url));
     load_config_string("ha_url", "", saved.ha_url, sizeof(saved.ha_url));
     load_config_string("ha_token", "", saved.ha_token, sizeof(saved.ha_token));
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {

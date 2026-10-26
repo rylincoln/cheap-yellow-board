@@ -18,7 +18,7 @@
 #define MAX_NETWORKS 24
 #define SSID_MAX 32
 #define PASSWORD_MAX 64
-#define URL_MAX 127   /* birdnet_viewer keeps the server in 128 bytes */
+#define URL_MAX 127   /* home_dashboard keeps each address in 128 bytes */
 #define FORM_MAX 3072 /* every field, percent-encoded */
 #define TOKEN_MAX 255
 #define DNS_PORT 53
@@ -229,11 +229,11 @@ static void send_form(httpd_req_t *request, const char *error,
         "onclick=\"this.form.pass.type=this.checked?'text':'password'\">Show password</label>"
         "<small>Leave it blank for an open network. For the network already saved, "
         "blank keeps its password.</small>"
-        "<label>BirdNET server <small>for birds on the dashboard</small></label>"
-        "<input name=\"url\" maxlength=\"127\" inputmode=\"url\" autocapitalize=\"none\" "
-        "autocorrect=\"off\" spellcheck=\"false\" placeholder=\"http://birdnet.local\" "
-        "value=\"");
-    send_escaped(request, settings->birdnet_url);
+        "<label>Wildlife camera server <small>for birds on the dashboard</small></label>"
+        "<input name=\"wildlife_url\" maxlength=\"127\" inputmode=\"url\" "
+        "autocapitalize=\"none\" autocorrect=\"off\" spellcheck=\"false\" "
+        "placeholder=\"http://192.168.1.50:8080\" value=\"");
+    send_escaped(request, settings->wildlife_url);
     httpd_resp_sendstr_chunk(
         request,
         "\"><h2>Home Assistant</h2>"
@@ -343,8 +343,9 @@ static esp_err_t save_post(httpd_req_t *request)
     bool ssid_ok = form_field(form, "ssid", submitted.ssid, sizeof(submitted.ssid));
     bool password_ok = form_field(form, "pass", submitted.password, sizeof(submitted.password)) &&
                        form_password_valid(submitted.password);
-    bool url_ok = form_field(form, "url", submitted.birdnet_url, sizeof(submitted.birdnet_url)) &&
-                  form_url_valid(submitted.birdnet_url, sizeof(submitted.birdnet_url));
+    bool wildlife_url_ok =
+        form_field(form, "wildlife_url", submitted.wildlife_url, sizeof(submitted.wildlife_url)) &&
+        form_url_valid(submitted.wildlife_url, sizeof(submitted.wildlife_url));
     bool ha_url_ok = form_field(form, "ha_url", submitted.ha_url, sizeof(submitted.ha_url)) &&
                      form_url_valid(submitted.ha_url, sizeof(submitted.ha_url));
     bool token_ok = form_field(form, "ha_token", submitted.ha_token, sizeof(submitted.ha_token));
@@ -357,7 +358,7 @@ static esp_err_t save_post(httpd_req_t *request)
     const char *error = !ssid_ok                    ? "The network name is too long."
                         : submitted.ssid[0] == '\0' ? "Choose or type a network."
                         : !password_ok              ? "The password must be 8 to 63 characters."
-                        : !url_ok                   ? "The BirdNET server must be an http:// address."
+                        : !wildlife_url_ok          ? "The wildlife camera server must be an http:// address."
                         : !ha_url_ok                ? "The Home Assistant address must be an http:// address."
                         : !token_ok                 ? "The token is too long."
                         : !sensors_ok               ? "Sensor IDs look like sensor.some_name."

@@ -9,6 +9,7 @@
 #include "glance.h"
 #include "ha_client.h"
 #include "readings.h"
+#include "wildlife.h"
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
 #include "esp_check.h"
@@ -38,8 +39,8 @@
 /* Settings the launcher (bootloader branch) stores in NVS for boot images,
    so no credentials are compiled into this published binary. */
 #define CONFIG_NAMESPACE "cyd_config"
-#define DEFAULT_BIRDNET_BASE_URL "http://birdnet.local"
-#define API_JSON_CAPACITY (16 * 1024)
+/* The wildlife camera's reply is read whole, up to this size. */
+#define WILDLIFE_JSON_CAPACITY (8 * 1024)
 #define IMAGE_JPEG_CAPACITY (320 * 1024)
 #define JPEG_WORKBUF_SIZE 3100
 #define IMAGE_TOP 0
@@ -47,22 +48,21 @@
 /* Notification bits for the dashboard task. */
 #define TAP_BIT BIT0
 #define WIFI_JOINED_BIT BIT1
-#define MIN_BIRD_CONFIDENCE 0.80
 /* A tap on the photo shows the bird's details this long, or until the next tap. */
 #define INFO_TIMEOUT_US (30LL * 1000 * 1000)
 /* The photo, and a message saying why there is none, give way to the glance
    screen after these. */
 #define PHOTO_TIMEOUT_US (30LL * 1000 * 1000)
 #define MESSAGE_TIMEOUT_US (5LL * 1000 * 1000)
-/* The BirdNET server has no taxonomy, so the family comes from GBIF. */
-#define GBIF_MATCH_URL "https://api.gbif.org/v1/species/match?name="
 #define COLOR_BLACK CYD_COLOR_BLACK
 
-static const char *TAG = "birdnet_cyd";
+static const char *TAG = "home_dashboard";
 
 static char wifi_ssid[33];
 static char wifi_password[65];
-static char birdnet_base_url[128];
+/* The wildlife camera gallery's address, without a trailing slash; empty
+   until phone setup stores one. */
+static char wildlife_url[128];
 static volatile bool wifi_connected;
 static TaskHandle_t app_task_handle;
 
@@ -98,28 +98,6 @@ typedef struct {
 } http_response_t;
 
 typedef struct {
-    char species[64];
-    char scientific_name[96];
-    char date[16];
-    char first_time[16];
-    char detected_time[16];
-    double confidence;
-    int count; /* detections in the visit; 0 if the server did not say */
-    bool found;
-} bird_detection_t;
-
-/* Details fetched for the info screen; empty strings until they arrive. */
-typedef struct {
-    char family[40];
-    char weather[40];
-    char seen[40];
-    char since[40];
-} bird_info_t;
-
-/* The bird in the photo, for the info screen. */
-static bird_detection_t displayed_bird;
-
-typedef struct {
     const uint8_t *data;
     size_t length;
     size_t offset;
@@ -128,8 +106,12 @@ typedef struct {
 } jpeg_reader_t;
 
 typedef struct {
+    /* The decoded image is scaled to target_width x target_height and drawn
+       with its top left corner at offset_x, offset_y. */
     int offset_x;
     int offset_y;
+    int target_width;
+    int target_height;
     unsigned int source_width;
     unsigned int source_height;
     uint8_t *rgb565;
@@ -144,17 +126,6 @@ typedef struct {
     jpeg_reader_t reader;
     jpeg_output_t output;
 } jpeg_context_t;
-
-typedef struct {
-    const char *data;
-    size_t length;
-    size_t position;
-} json_cursor_t;
-
-typedef struct {
-    size_t start;
-    size_t end;
-} json_value_t;
 
 /* ---- Status screen ----
 
@@ -181,7 +152,7 @@ static char crash_status[STATUS_SIZE];
 static portMUX_TYPE status_lock = portMUX_INITIALIZER_UNLOCKED;
 static char wifi_status[STATUS_SIZE] = "starting";
 static char ha_status[STATUS_SIZE] = "waiting for Wi-Fi";
-/* The last BirdNET request's result, for the BIRDNET ERROR message. */
+/* The last wildlife camera request's result, for the WILDLIFE ERROR message. */
 static char server_status[STATUS_SIZE];
 static volatile uint32_t status_changes;
 static uint32_t shown_status_changes;
@@ -462,507 +433,47 @@ static void http_response_free(http_response_t *response)
     memset(response, 0, sizeof(*response));
 }
 
-static void json_skip_whitespace(json_cursor_t *cursor)
+/* Opens a GET of the JPEG at url and reads its headers, leaving *client
+   ready to read a body of *length bytes. Requires HTTP 200 and a length
+   from 1 to IMAGE_JPEG_CAPACITY. */
+static esp_err_t open_image_stream(const char *url, esp_http_client_handle_t *client,
+                                   size_t *length)
 {
-    while (cursor->position < cursor->length &&
-           (cursor->data[cursor->position] == ' ' ||
-            cursor->data[cursor->position] == '\t' ||
-            cursor->data[cursor->position] == '\r' ||
-            cursor->data[cursor->position] == '\n')) {
-        ++cursor->position;
-    }
-}
-
-static int json_hex_value(char character)
-{
-    if (character >= '0' && character <= '9') {
-        return character - '0';
-    }
-    if (character >= 'a' && character <= 'f') {
-        return character - 'a' + 10;
-    }
-    if (character >= 'A' && character <= 'F') {
-        return character - 'A' + 10;
-    }
-    return -1;
-}
-
-static bool json_parse_string(json_cursor_t *cursor, char *output, size_t capacity)
-{
-    if (cursor->position >= cursor->length || cursor->data[cursor->position++] != '"') {
-        return false;
-    }
-    size_t written = 0;
-    while (cursor->position < cursor->length) {
-        unsigned char character = (unsigned char)cursor->data[cursor->position++];
-        if (character == '"') {
-            if (output != NULL && capacity > 0) {
-                output[written] = '\0';
-            }
-            return true;
-        }
-        if (character < 0x20) {
-            return false;
-        }
-        if (character == '\\') {
-            if (cursor->position >= cursor->length) {
-                return false;
-            }
-            character = (unsigned char)cursor->data[cursor->position++];
-            if (character == 'u') {
-                if (cursor->length - cursor->position < 4) {
-                    return false;
-                }
-                int codepoint = 0;
-                for (int index = 0; index < 4; ++index) {
-                    int nibble = json_hex_value(cursor->data[cursor->position++]);
-                    if (nibble < 0) {
-                        return false;
-                    }
-                    codepoint = (codepoint << 4) | nibble;
-                }
-                character = codepoint <= 0x7F ? (unsigned char)codepoint : '?';
-            } else if (character == '"' || character == '\\' || character == '/') {
-                /* Keep the escaped character as-is. */
-            } else if (character == 'b') {
-                character = '\b';
-            } else if (character == 'f') {
-                character = '\f';
-            } else if (character == 'n') {
-                character = '\n';
-            } else if (character == 'r') {
-                character = '\r';
-            } else if (character == 't') {
-                character = '\t';
-            } else {
-                return false;
-            }
-        }
-        if (output != NULL && capacity > 1 && written < capacity - 1) {
-            output[written++] = (char)character;
-        }
-    }
-    return false;
-}
-
-static bool json_skip_value(json_cursor_t *cursor, unsigned int depth)
-{
-    if (depth > 16) {
-        return false;
-    }
-    json_skip_whitespace(cursor);
-    if (cursor->position >= cursor->length) {
-        return false;
-    }
-    char first = cursor->data[cursor->position];
-    if (first == '"') {
-        return json_parse_string(cursor, NULL, 0);
-    }
-    if (first == '{') {
-        ++cursor->position;
-        json_skip_whitespace(cursor);
-        if (cursor->position < cursor->length && cursor->data[cursor->position] == '}') {
-            ++cursor->position;
-            return true;
-        }
-        while (cursor->position < cursor->length) {
-            if (!json_parse_string(cursor, NULL, 0)) {
-                return false;
-            }
-            json_skip_whitespace(cursor);
-            if (cursor->position >= cursor->length || cursor->data[cursor->position++] != ':') {
-                return false;
-            }
-            if (!json_skip_value(cursor, depth + 1)) {
-                return false;
-            }
-            json_skip_whitespace(cursor);
-            if (cursor->position >= cursor->length) {
-                return false;
-            }
-            char delimiter = cursor->data[cursor->position++];
-            if (delimiter == '}') {
-                return true;
-            }
-            if (delimiter != ',') {
-                return false;
-            }
-            json_skip_whitespace(cursor);
-        }
-        return false;
-    }
-    if (first == '[') {
-        ++cursor->position;
-        json_skip_whitespace(cursor);
-        if (cursor->position < cursor->length && cursor->data[cursor->position] == ']') {
-            ++cursor->position;
-            return true;
-        }
-        while (cursor->position < cursor->length) {
-            if (!json_skip_value(cursor, depth + 1)) {
-                return false;
-            }
-            json_skip_whitespace(cursor);
-            if (cursor->position >= cursor->length) {
-                return false;
-            }
-            char delimiter = cursor->data[cursor->position++];
-            if (delimiter == ']') {
-                return true;
-            }
-            if (delimiter != ',') {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    size_t start = cursor->position;
-    while (cursor->position < cursor->length) {
-        char character = cursor->data[cursor->position];
-        if (character == ',' || character == ']' || character == '}' ||
-            character == ' ' || character == '\t' ||
-            character == '\r' || character == '\n') {
-            break;
-        }
-        ++cursor->position;
-    }
-    return cursor->position > start;
-}
-
-static bool json_object_field(const char *data, size_t start, size_t end,
-                              const char *field_name, json_value_t *value)
-{
-    json_cursor_t cursor = {.data = data, .length = end, .position = start};
-    json_skip_whitespace(&cursor);
-    if (cursor.position >= end || cursor.data[cursor.position++] != '{') {
-        return false;
-    }
-    json_skip_whitespace(&cursor);
-    if (cursor.position < end && cursor.data[cursor.position] == '}') {
-        return false;
-    }
-    while (cursor.position < end) {
-        char key[48];
-        if (!json_parse_string(&cursor, key, sizeof(key))) {
-            return false;
-        }
-        json_skip_whitespace(&cursor);
-        if (cursor.position >= end || cursor.data[cursor.position++] != ':') {
-            return false;
-        }
-        json_skip_whitespace(&cursor);
-        size_t value_start = cursor.position;
-        if (!json_skip_value(&cursor, 0)) {
-            return false;
-        }
-        size_t value_end = cursor.position;
-        if (strcmp(key, field_name) == 0) {
-            value->start = value_start;
-            value->end = value_end;
-            return true;
-        }
-        json_skip_whitespace(&cursor);
-        if (cursor.position >= end) {
-            return false;
-        }
-        char delimiter = cursor.data[cursor.position++];
-        if (delimiter == '}') {
-            return false;
-        }
-        if (delimiter != ',') {
-            return false;
-        }
-        json_skip_whitespace(&cursor);
-    }
-    return false;
-}
-
-static bool json_value_string(const char *data, json_value_t value,
-                              char *output, size_t capacity)
-{
-    json_cursor_t cursor = {
-        .data = data, .length = value.end, .position = value.start,
-    };
-    return json_parse_string(&cursor, output, capacity) && cursor.position == value.end;
-}
-
-static bool json_value_number(const char *data, json_value_t value, double *number)
-{
-    char buffer[40];
-    size_t length = value.end - value.start;
-    if (length == 0 || length >= sizeof(buffer)) {
-        return false;
-    }
-    memcpy(buffer, data + value.start, length);
-    buffer[length] = '\0';
-    char *end;
-    *number = strtod(buffer, &end);
-    return end != buffer && *end == '\0';
-}
-
-static bool json_object_string(const char *data, size_t start, size_t end,
-                               const char *key, char *output, size_t capacity)
-{
-    json_value_t value;
-    output[0] = '\0';
-    return json_object_field(data, start, end, key, &value) &&
-           json_value_string(data, value, output, capacity);
-}
-
-static esp_err_t fetch_latest_bird(bird_detection_t *bird)
-{
-    char url[sizeof(birdnet_base_url) + 32];
-    snprintf(url, sizeof(url), "%s/api/v1/detections/visits", birdnet_base_url);
-    http_response_t response;
-    esp_err_t result = http_get(url, API_JSON_CAPACITY, &response);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Could not fetch BirdNET visits: %s", esp_err_to_name(result));
-        return result;
-    }
-
-    json_value_t visits;
-    if (!json_object_field((const char *)response.data, 0, response.length,
-                           "visits", &visits) ||
-        visits.start >= visits.end || response.data[visits.start] != '[') {
-        http_response_free(&response);
-        ESP_LOGE(TAG, "BirdNET visits response has no visits array");
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
-    memset(bird, 0, sizeof(*bird));
-    double best_seconds_ago = 0;
-    json_cursor_t array = {
-        .data = (const char *)response.data,
-        .length = visits.end,
-        .position = visits.start + 1,
-    };
-    bool valid_response = true;
-    while (array.position < array.length) {
-        json_skip_whitespace(&array);
-        if (array.position < array.length && array.data[array.position] == ']') {
-            ++array.position;
-            break;
-        }
-        json_value_t visit = {.start = array.position};
-        if (!json_skip_value(&array, 0)) {
-            valid_response = false;
-            break;
-        }
-        visit.end = array.position;
-
-        json_value_t confidence_value;
-        json_value_t seconds_ago_value;
-        double confidence = 0;
-        double seconds_ago = 0;
-        if (!json_object_field(array.data, visit.start, visit.end,
-                               "best_confidence", &confidence_value) ||
-            !json_object_field(array.data, visit.start, visit.end,
-                               "seconds_ago", &seconds_ago_value) ||
-            !json_value_number(array.data, confidence_value, &confidence) ||
-            !json_value_number(array.data, seconds_ago_value, &seconds_ago) ||
-            confidence < MIN_BIRD_CONFIDENCE) {
-            json_skip_whitespace(&array);
-            if (array.position < array.length && array.data[array.position] == ',') {
-                ++array.position;
-                continue;
-            }
-            if (array.position < array.length && array.data[array.position] == ']') {
-                ++array.position;
-                break;
-            }
-            valid_response = false;
-            break;
-        }
-        if (bird->found && seconds_ago >= best_seconds_ago) {
-            json_skip_whitespace(&array);
-            if (array.position < array.length && array.data[array.position] == ',') {
-                ++array.position;
-                continue;
-            }
-            if (array.position < array.length && array.data[array.position] == ']') {
-                ++array.position;
-                break;
-            }
-            valid_response = false;
-            break;
-        }
-        char species[sizeof(bird->species)];
-        char scientific_name[sizeof(bird->scientific_name)];
-        char date[sizeof(bird->date)];
-        char detected_time[sizeof(bird->detected_time)];
-        if (!json_object_string(array.data, visit.start, visit.end,
-                                "species", species, sizeof(species)) ||
-            !json_object_string(array.data, visit.start, visit.end,
-                                "sci_name", scientific_name, sizeof(scientific_name)) ||
-            !json_object_string(array.data, visit.start, visit.end,
-                                "date", date, sizeof(date)) ||
-            !json_object_string(array.data, visit.start, visit.end,
-                                "last_time", detected_time, sizeof(detected_time)) ||
-            species[0] == '\0' || scientific_name[0] == '\0') {
-            json_skip_whitespace(&array);
-            if (array.position < array.length && array.data[array.position] == ',') {
-                ++array.position;
-                continue;
-            }
-            if (array.position < array.length && array.data[array.position] == ']') {
-                ++array.position;
-                break;
-            }
-            valid_response = false;
-            break;
-        }
-        snprintf(bird->species, sizeof(bird->species), "%s", species);
-        snprintf(bird->scientific_name, sizeof(bird->scientific_name), "%s",
-                 scientific_name);
-        snprintf(bird->date, sizeof(bird->date), "%s", date);
-        snprintf(bird->detected_time, sizeof(bird->detected_time), "%s", detected_time);
-        /* Extras for the info screen; a visit without them still counts. */
-        if (!json_object_string(array.data, visit.start, visit.end, "first_time",
-                                bird->first_time, sizeof(bird->first_time))) {
-            snprintf(bird->first_time, sizeof(bird->first_time), "%s", detected_time);
-        }
-        json_value_t count_value;
-        double count = 0;
-        bird->count = json_object_field(array.data, visit.start, visit.end, "count",
-                                        &count_value) &&
-                              json_value_number(array.data, count_value, &count)
-                          ? (int)count
-                          : 0;
-        bird->confidence = confidence;
-        bird->found = true;
-        best_seconds_ago = seconds_ago;
-
-        json_skip_whitespace(&array);
-        if (array.position < array.length && array.data[array.position] == ',') {
-            ++array.position;
-            continue;
-        }
-        if (array.position < array.length && array.data[array.position] == ']') {
-            ++array.position;
-            break;
-        }
-        valid_response = false;
-        break;
-    }
-    json_skip_whitespace(&array);
-    if (array.position != array.length || array.data[array.position - 1] != ']') {
-        valid_response = false;
-    }
-    http_response_free(&response);
-    if (!valid_response) {
-        ESP_LOGE(TAG, "BirdNET visits response contains malformed JSON");
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-    if (!bird->found) {
-        ESP_LOGW(TAG, "No visit met the %.0f%% confidence threshold",
-                 MIN_BIRD_CONFIDENCE * 100);
-    } else {
-        ESP_LOGI(TAG, "Latest qualifying visit: %s (%.1f%%), %s %s",
-                 bird->species, bird->confidence * 100,
-                 bird->date, bird->detected_time);
-    }
-    return ESP_OK;
-}
-
-static bool url_encode_path(const char *source, char *destination, size_t capacity)
-{
-    static const char hex[] = "0123456789ABCDEF";
-    size_t output = 0;
-    for (const unsigned char *cursor = (const unsigned char *)source;
-         *cursor != '\0'; ++cursor) {
-        bool safe = (*cursor >= 'a' && *cursor <= 'z') ||
-                    (*cursor >= 'A' && *cursor <= 'Z') ||
-                    (*cursor >= '0' && *cursor <= '9') ||
-                    *cursor == '-' || *cursor == '_' || *cursor == '.';
-        size_t needed = safe ? 1 : 3;
-        if (output + needed >= capacity) {
-            return false;
-        }
-        if (safe) {
-            destination[output++] = (char)*cursor;
-        } else {
-            destination[output++] = '%';
-            destination[output++] = hex[*cursor >> 4];
-            destination[output++] = hex[*cursor & 0x0F];
-        }
-    }
-    destination[output] = '\0';
-    return true;
-}
-
-static esp_err_t fetch_bird_image(const char *scientific_name, size_t *jpeg_length,
-                                  char *image_url,
-                                  size_t image_url_capacity,
-                                  esp_http_client_handle_t *image_client)
-{
-    char encoded_name[288];
-    char metadata_url[sizeof(birdnet_base_url) + sizeof(encoded_name) + 16];
-    if (!url_encode_path(scientific_name, encoded_name, sizeof(encoded_name)) ||
-        snprintf(metadata_url, sizeof(metadata_url),
-                 "%s/api/v1/image/%s", birdnet_base_url, encoded_name) >=
-            (int)sizeof(metadata_url)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    http_response_t metadata;
-    esp_err_t result = http_get(metadata_url, API_JSON_CAPACITY, &metadata);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "Could not fetch image metadata: %s", esp_err_to_name(result));
-        return result;
-    }
-    json_value_t data_value;
-    bool has_data = json_object_field((const char *)metadata.data, 0,
-                                      metadata.length, "data", &data_value);
-    bool metadata_valid =
-        has_data &&
-        json_object_string((const char *)metadata.data, data_value.start,
-                           data_value.end, "image_url",
-                           image_url, image_url_capacity);
-    http_response_free(&metadata);
-    if (!metadata_valid) {
-        ESP_LOGE(TAG, "Image metadata response is malformed or missing image URL");
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-    if (strncmp(image_url, "https://", 8) != 0) {
-        ESP_LOGE(TAG, "Image metadata did not provide an HTTPS image URL");
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-
     esp_http_client_config_t config = {
-        .url = image_url,
+        .url = url,
         .timeout_ms = 15000,
         .buffer_size = 1024,
         .buffer_size_tx = 1024,
-        .crt_bundle_attach = esp_crt_bundle_attach,
+        .crt_bundle_attach = strncmp(url, "https://", 8) == 0
+                                 ? esp_crt_bundle_attach
+                                 : NULL,
     };
-    *image_client = esp_http_client_init(&config);
-    if (*image_client == NULL) {
+    *client = esp_http_client_init(&config);
+    if (*client == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    result = esp_http_client_open(*image_client, 0);
+    esp_err_t result = esp_http_client_open(*client, 0);
     if (result != ESP_OK) {
-        esp_http_client_cleanup(*image_client);
-        *image_client = NULL;
-        ESP_LOGE(TAG, "Could not open Wikimedia image stream: %s",
-                 esp_err_to_name(result));
+        esp_http_client_cleanup(*client);
+        *client = NULL;
+        ESP_LOGE(TAG, "Could not open image stream: %s", esp_err_to_name(result));
         return result;
     }
-    int64_t content_length = esp_http_client_fetch_headers(*image_client);
-    int status = esp_http_client_get_status_code(*image_client);
+    int64_t content_length = esp_http_client_fetch_headers(*client);
+    int status = esp_http_client_get_status_code(*client);
     last_http_status = status;
     if (status != 200 || content_length <= 0 ||
         content_length > IMAGE_JPEG_CAPACITY) {
-        ESP_LOGE(TAG, "Wikimedia image stream returned HTTP %d and %u bytes",
+        ESP_LOGE(TAG, "Image stream returned HTTP %d and %u bytes",
                  status, (unsigned)(content_length < 0 ? 0 : content_length));
-        esp_http_client_close(*image_client);
-        esp_http_client_cleanup(*image_client);
-        *image_client = NULL;
+        esp_http_client_close(*client);
+        esp_http_client_cleanup(*client);
+        *client = NULL;
         return ESP_ERR_INVALID_RESPONSE;
     }
-    *jpeg_length = (size_t)content_length;
-    ESP_LOGI(TAG, "Opened %u-byte Wikimedia image stream; free heap: %u bytes",
-             (unsigned)*jpeg_length, (unsigned)esp_get_free_heap_size());
+    *length = (size_t)content_length;
+    ESP_LOGI(TAG, "Opened %u-byte image stream; free heap: %u bytes",
+             (unsigned)*length, (unsigned)esp_get_free_heap_size());
     return ESP_OK;
 }
 
@@ -992,7 +503,7 @@ static UINT jpeg_input(JDEC *decoder, BYTE *buffer, UINT length)
         int bytes = esp_http_client_read(reader->client, destination, (int)chunk);
         if (bytes <= 0) {
             reader->read_error = true;
-            ESP_LOGE(TAG, "Wikimedia image stream ended during JPEG decode");
+            ESP_LOGE(TAG, "Image stream ended during JPEG decode");
             break;
         }
         received += (size_t)bytes;
@@ -1021,27 +532,29 @@ static UINT jpeg_output(JDEC *decoder, void *pixels, JRECT *rectangle)
     }
 
     const uint8_t *rgb = pixels;
-    int left = ((size_t)rectangle->left * LCD_WIDTH +
+    int left = ((size_t)rectangle->left * output->target_width +
                 output->source_width - 1) / output->source_width;
-    int right = ((size_t)(rectangle->right + 1) * LCD_WIDTH +
+    int right = ((size_t)(rectangle->right + 1) * output->target_width +
                  output->source_width - 1) / output->source_width;
-    int top = ((size_t)rectangle->top * LCD_HEIGHT +
+    int top = ((size_t)rectangle->top * output->target_height +
                output->source_height - 1) / output->source_height;
-    int bottom = ((size_t)(rectangle->bottom + 1) * LCD_HEIGHT +
+    int bottom = ((size_t)(rectangle->bottom + 1) * output->target_height +
                   output->source_height - 1) / output->source_height;
     int output_width = right - left;
     int output_height = bottom - top;
-    if (output_width <= 0 || output_height <= 0 ||
-        (size_t)output_width * output_height * 2 > output->buffer_capacity) {
+    if (output_width <= 0 || output_height <= 0) {
+        return 1; /* a sliver at the image's edge that shrinks to nothing */
+    }
+    if ((size_t)output_width * output_height * 2 > output->buffer_capacity) {
         ESP_LOGE(TAG, "Resized JPEG tile %dx%d exceeds its output buffer",
                  output_width, output_height);
         return 0;
     }
     for (int row = 0; row < output_height; ++row) {
-        int source_y = (top + row) * output->source_height / LCD_HEIGHT -
+        int source_y = (top + row) * output->source_height / output->target_height -
                        rectangle->top;
         for (int column = 0; column < output_width; ++column) {
-            int source_x = (left + column) * output->source_width / LCD_WIDTH -
+            int source_x = (left + column) * output->source_width / output->target_width -
                            rectangle->left;
             int source_index = (source_y * width + source_x) * 3;
             uint8_t red = rgb[source_index];
@@ -1055,11 +568,11 @@ static UINT jpeg_output(JDEC *decoder, void *pixels, JRECT *rectangle)
         }
     }
     /* cyd_draw_pattern sends pixels in the panel's column-major order. */
-    output->tile_left = left;
-    output->tile_top = top;
+    output->tile_left = output->offset_x + left;
+    output->tile_top = output->offset_y + top;
     output->tile_width = output_width;
-    if (cyd_draw_pattern(left, top, output_width, output_height, jpeg_tile_pixel,
-                         output) != ESP_OK) {
+    if (cyd_draw_pattern(output->tile_left, output->tile_top, output_width, output_height,
+                         jpeg_tile_pixel, output) != ESP_OK) {
         return 0;
     }
     return 1;
@@ -1077,27 +590,44 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
     }
     JRESULT result = jd_prepare(&decoder, jpeg_input, work_buffer,
                                 JPEG_WORKBUF_SIZE, &context);
-    if (result != JDR_OK) {
+    if (result != JDR_OK || decoder.width == 0 || decoder.height == 0) {
         heap_caps_free(work_buffer);
         ESP_LOGE(TAG, "JPEG prepare failed: %d", result);
         return ESP_ERR_INVALID_RESPONSE;
     }
 
-    /* Decode at the smallest 1/2^n size still at least as wide as the panel,
-       so the tile scaler only ever shrinks: 1280 px decodes at 1/4 for 320 px
-       panels and at 1/2 for 480 px ones, rather than stretching 320 to 480. */
+    /* Fit the image inside the screen, keeping its aspect ratio: a 330x220
+       photo fills a 480x320 screen, and a 330x499 one is 212x320, centred
+       on black. */
+    uint32_t image_width = decoder.width;
+    uint32_t image_height = decoder.height;
+    int fit_width = LCD_WIDTH;
+    int fit_height = IMAGE_HEIGHT;
+    if (image_width * (uint32_t)IMAGE_HEIGHT > image_height * (uint32_t)LCD_WIDTH) {
+        fit_height = (int)((image_height * LCD_WIDTH + image_width / 2) / image_width);
+    } else {
+        fit_width = (int)((image_width * IMAGE_HEIGHT + image_height / 2) / image_height);
+    }
+    fit_width = fit_width > 0 ? fit_width : 1;
+    fit_height = fit_height > 0 ? fit_height : 1;
+
+    /* Decode at the smallest 1/2^n size still at least as large as the fit
+       both ways, so the tile scaler only shrinks unless the photo is smaller
+       than its fit: 1280x853 decodes at 1/2 to fit 480x320 and at 1/4 to
+       fit 320x213. */
     BYTE scale = 0;
     while (scale < 3 &&
-           (int)((decoder.width + (2U << scale) - 1) >> (scale + 1)) >= LCD_WIDTH) {
+           (int)((decoder.width + (2U << scale) - 1) >> (scale + 1)) >= fit_width &&
+           (int)((decoder.height + (2U << scale) - 1) >> (scale + 1)) >= fit_height) {
         ++scale;
     }
     int scaled_width = (int)((decoder.width + (1U << scale) - 1) >> scale);
     int scaled_height = (int)((decoder.height + (1U << scale) - 1) >> scale);
-    size_t tile_width = ((size_t)16 * LCD_WIDTH + scaled_width - 1) / scaled_width + 1;
-    size_t tile_height = ((size_t)16 * LCD_HEIGHT + scaled_height - 1) / scaled_height + 1;
+    size_t tile_width = ((size_t)16 * fit_width + scaled_width - 1) / scaled_width + 1;
+    size_t tile_height = ((size_t)16 * fit_height + scaled_height - 1) / scaled_height + 1;
     if (tile_width > 64 || tile_height > 64) {
         heap_caps_free(work_buffer);
-        ESP_LOGE(TAG, "JPEG dimensions are too small for full-screen scaling");
+        ESP_LOGE(TAG, "JPEG is too small to scale up to %dx%d", fit_width, fit_height);
         return ESP_ERR_INVALID_SIZE;
     }
     size_t output_capacity = tile_width * tile_height * 2;
@@ -1107,6 +637,10 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
         return ESP_ERR_NO_MEM;
     }
     context.output = (jpeg_output_t){
+        .offset_x = (LCD_WIDTH - fit_width) / 2,
+        .offset_y = IMAGE_TOP + (IMAGE_HEIGHT - fit_height) / 2,
+        .target_width = fit_width,
+        .target_height = fit_height,
         .source_width = (unsigned int)scaled_width,
         .source_height = (unsigned int)scaled_height,
         .rgb565 = rgb565,
@@ -1125,158 +659,100 @@ static esp_err_t draw_jpeg(esp_http_client_handle_t image_client, size_t length)
         ESP_LOGE(TAG, "JPEG decode failed: %d", result);
         return ESP_ERR_INVALID_RESPONSE;
     }
-    ESP_LOGI(TAG, "Rendered %ux%u bird image at 1:%u scale",
-             (unsigned)decoder.width, (unsigned)decoder.height, 1U << scale);
+    ESP_LOGI(TAG, "Rendered %ux%u bird image at 1:%u scale as %dx%d",
+             (unsigned)decoder.width, (unsigned)decoder.height, 1U << scale, fit_width,
+             fit_height);
     return ESP_OK;
 }
 
-typedef enum { BIRD_SHOWN, BIRD_NONE, BIRD_FAILED } bird_result_t;
+/* The wildlife camera's latest birds, newest first, kept for the details
+   page. */
+static wildlife_bird_t birds[WILDLIFE_MAX_BIRDS];
+static int bird_count;
 
-/* Fetches today's latest qualifying visit and streams its photo full
-   screen. On BIRD_FAILED, server_status says why. */
-static bird_result_t show_latest_bird(void)
+typedef enum { BIRD_SHOWN, BIRD_NO_PHOTO, BIRD_NONE, BIRD_FAILED } bird_result_t;
+
+/* Asks the wildlife camera for its latest birds. Returns false, with
+   server_status saying why, when the request fails or the reply can't be
+   read. */
+static bool fetch_birds(void)
 {
-    bird_detection_t bird;
-    show_progress("getting visits");
-    esp_err_t result = fetch_latest_bird(&bird);
+    char url[sizeof(wildlife_url) + sizeof("/frame/wildlife")];
+    snprintf(url, sizeof(url), "%s/frame/wildlife", wildlife_url);
+    http_response_t response;
+    esp_err_t result = http_get(url, WILDLIFE_JSON_CAPACITY, &response);
     if (result != ESP_OK) {
-        report_failure("visits", result);
-        set_stage("idle");
-        return BIRD_FAILED;
+        ESP_LOGE(TAG, "Could not fetch the wildlife camera's birds: %s",
+                 esp_err_to_name(result));
+        report_failure("birds", result);
+        return false;
     }
-    if (!bird.found) {
-        set_stage("idle");
-        return BIRD_NONE;
+    int count = wildlife_parse_birds((const char *)response.data, response.length, birds,
+                                     WILDLIFE_MAX_BIRDS);
+    http_response_free(&response);
+    bird_count = count > 0 ? count : 0;
+    if (count < 0) {
+        ESP_LOGE(TAG, "The wildlife camera's reply has no readable birds array");
+        set_server_status("bad reply");
+        return false;
     }
+    ESP_LOGI(TAG, "The wildlife camera has %d birds", count);
+    return true;
+}
 
-    char image_url[768];
-    size_t jpeg_length = 0;
+/* Streams the bird's photo from the wildlife camera, fitted to the screen.
+   Returns false, with the reason logged, when it has no photo or the photo
+   can't be fetched or drawn. */
+static bool show_bird_photo(const wildlife_bird_t *bird)
+{
+    char url[sizeof(wildlife_url) + sizeof(bird->photo_url)];
+    if (!wildlife_join_url(wildlife_url, bird->photo_url, url, sizeof(url))) {
+        ESP_LOGW(TAG, "No photo of %s", bird->label);
+        return false;
+    }
     esp_http_client_handle_t image_client = NULL;
+    size_t jpeg_length = 0;
     show_progress("getting photo");
-    result = fetch_bird_image(bird.scientific_name, &jpeg_length, image_url, sizeof(image_url),
-                              &image_client);
+    esp_err_t result = open_image_stream(url, &image_client, &jpeg_length);
     if (result != ESP_OK) {
-        report_failure("photo", result);
-        set_stage("idle");
-        return BIRD_FAILED;
+        ESP_LOGW(TAG, "Could not get the photo of %s: %s", bird->label,
+                 esp_err_to_name(result));
+        return false;
     }
     set_stage("drawing photo");
     result = draw_jpeg(image_client, jpeg_length);
     esp_http_client_close(image_client);
     esp_http_client_cleanup(image_client);
-    set_stage("idle");
     if (result != ESP_OK) {
-        report_failure("drawing", result);
-        ESP_LOGW(TAG, "Could not render bird image: %s", esp_err_to_name(result));
+        ESP_LOGW(TAG, "Could not draw the photo of %s: %s", bird->label,
+                 esp_err_to_name(result));
+        return false;
+    }
+    return true;
+}
+
+/* Fetches the wildlife camera's latest birds and streams the newest one's
+   photo full screen. On BIRD_FAILED, server_status says why. */
+static bird_result_t show_latest_bird(void)
+{
+    show_progress("getting birds");
+    if (!fetch_birds()) {
+        set_stage("idle");
         return BIRD_FAILED;
     }
-    displayed_bird = bird;
-    return BIRD_SHOWN;
+    if (bird_count == 0) {
+        set_stage("idle");
+        return BIRD_NONE;
+    }
+    bool shown = show_bird_photo(&birds[0]);
+    set_stage("idle");
+    return shown ? BIRD_SHOWN : BIRD_NO_PHOTO;
 }
 
 /* ---- Bird info screen ---- */
 
-/* Fetches a JSON document of up to capacity bytes. */
-static esp_err_t get_json(const char *url, size_t capacity, http_response_t *response)
-{
-    esp_err_t result = http_get(url, capacity, response);
-    if (result != ESP_OK) {
-        ESP_LOGW(TAG, "GET %s failed: %s", url, esp_err_to_name(result));
-    }
-    return result;
-}
-
-static int rounded(double value)
-{
-    return (int)(value < 0 ? value - 0.5 : value + 0.5);
-}
-
-static bool json_top_number(const http_response_t *response, const char *key, double *number)
-{
-    json_value_t value;
-    return json_object_field((const char *)response->data, 0, response->length, key, &value) &&
-           json_value_number((const char *)response->data, value, number);
-}
-
-static bool json_top_string(const http_response_t *response, const char *key, char *output,
-                            size_t capacity)
-{
-    return json_object_string((const char *)response->data, 0, response->length, key, output,
-                              capacity);
-}
-
-/* The family from GBIF's name match, such as "Paridae"; kept per species. */
-static void fetch_family(const char *scientific_name, char *family, size_t capacity)
-{
-    static char cached_species[96];
-    static char cached_family[40];
-    if (strcmp(cached_species, scientific_name) != 0) {
-        char encoded[288];
-        char url[sizeof(GBIF_MATCH_URL) + sizeof(encoded)];
-        http_response_t response;
-        cached_family[0] = '\0';
-        if (url_encode_path(scientific_name, encoded, sizeof(encoded)) &&
-            snprintf(url, sizeof(url), GBIF_MATCH_URL "%s", encoded) < (int)sizeof(url) &&
-            get_json(url, API_JSON_CAPACITY, &response) == ESP_OK) {
-            json_top_string(&response, "family", cached_family, sizeof(cached_family));
-            http_response_free(&response);
-        }
-        snprintf(cached_species, sizeof(cached_species), "%s", scientific_name);
-    }
-    snprintf(family, capacity, "%s", cached_family[0] != '\0' ? cached_family : "family ?");
-}
-
-/* "now 68F Clear": the server keeps only the current weather, not the
-   weather at the time of a detection. */
-static void fetch_weather(char *weather, size_t capacity)
-{
-    char url[sizeof(birdnet_base_url) + 32];
-    snprintf(url, sizeof(url), "%s/api/v1/weather/current", birdnet_base_url);
-    http_response_t response;
-    snprintf(weather, capacity, "weather ?");
-    if (get_json(url, API_JSON_CAPACITY, &response) != ESP_OK) {
-        return;
-    }
-    double temperature;
-    char unit[8];
-    char condition[24];
-    if (json_top_number(&response, "temp", &temperature)) {
-        /* "°F" arrives as "?F": keep the letter. */
-        size_t unit_length = json_top_string(&response, "temp_unit", unit, sizeof(unit))
-                                 ? strlen(unit)
-                                 : 0;
-        if (!json_top_string(&response, "condition", condition, sizeof(condition))) {
-            condition[0] = '\0';
-        }
-        snprintf(weather, capacity, "now %d%c %s", rounded(temperature),
-                 unit_length > 0 ? unit[unit_length - 1] : ' ', condition);
-    }
-    http_response_free(&response);
-}
-
-/* How often the station has heard the species, and since when. */
-static void fetch_species_totals(const char *scientific_name, bird_info_t *info)
-{
-    char encoded[288];
-    char url[sizeof(birdnet_base_url) + sizeof(encoded) + 40];
-    http_response_t response;
-    snprintf(info->seen, sizeof(info->seen), "heard ? times");
-    if (!url_encode_path(scientific_name, encoded, sizeof(encoded)) ||
-        snprintf(url, sizeof(url), "%s/api/v1/species/detail?sci_name=%s", birdnet_base_url,
-                 encoded) >= (int)sizeof(url) ||
-        get_json(url, 4 * API_JSON_CAPACITY, &response) != ESP_OK) {
-        return;
-    }
-    double total;
-    char first_seen[16];
-    if (json_top_number(&response, "total_detections", &total)) {
-        snprintf(info->seen, sizeof(info->seen), "heard %d times", rounded(total));
-    }
-    if (json_top_string(&response, "first_seen", first_seen, sizeof(first_seen))) {
-        snprintf(info->since, sizeof(info->since), "since %s", first_seen);
-    }
-    http_response_free(&response);
-}
+/* Birds listed under "also heard", on rows 5 to 8. */
+#define ALSO_HEARD_ROWS 4
 
 /* Splits a name at the last space that keeps the first line within one row. */
 static void wrap_name(const char *name, char *first, char *second, size_t capacity)
@@ -1296,27 +772,29 @@ static void wrap_name(const char *name, char *first, char *second, size_t capaci
     snprintf(second, capacity, "%s", name + split + (name[split] == ' ' ? 1 : 0));
 }
 
-/* "Carolina Chickadee / Poecile caro... / Paridae / 10-20 09:06-09:13 /
-   19 calls, 94% / now 68F Clear / heard 1127 times / since 2026-09-12". */
-static void draw_bird_info(const bird_detection_t *bird, const bird_info_t *info)
+/* Shows the latest birds at once, without a request: "Steller's Jay /
+   4:42 PM / confidence 75% / also heard / Common Raven 3:10 PM ...". */
+static void show_bird_info(void)
 {
-    char name[2][CYD_TEXT_COLUMNS * 4];
-    char heard[48];
-    char calls[48];
-    wrap_name(bird->species, name[0], name[1], sizeof(name[0]));
-    /* "2026-10-20" shows as "10-20"; times drop their seconds. */
-    const char *date = strlen(bird->date) >= 10 ? bird->date + 5 : bird->date;
-    if (strcmp(bird->first_time, bird->detected_time) == 0) {
-        snprintf(heard, sizeof(heard), "%.5s at %.5s", date, bird->detected_time);
+    const wildlife_bird_t *latest = &birds[0];
+    char name[2][sizeof(latest->label)];
+    char confidence[sizeof(latest->confidence) + 16];
+    char heard[ALSO_HEARD_ROWS][CYD_TEXT_MAX_COLUMNS + 1];
+    info_on_screen = true;
+    status_on_screen = false;
+    set_stage("showing info");
+    wrap_name(latest->label, name[0], name[1], sizeof(name[0]));
+    if (latest->confidence[0] != '\0') {
+        snprintf(confidence, sizeof(confidence), "confidence %s", latest->confidence);
     } else {
-        snprintf(heard, sizeof(heard), "%.5s %.5s-%.5s", date, bird->first_time,
-                 bird->detected_time);
+        confidence[0] = '\0';
     }
-    if (bird->count > 0) {
-        snprintf(calls, sizeof(calls), "%d call%s, %d%%", bird->count,
-                 bird->count == 1 ? "" : "s", rounded(bird->confidence * 100));
-    } else {
-        snprintf(calls, sizeof(calls), "confidence %d%%", rounded(bird->confidence * 100));
+    for (int index = 0; index < ALSO_HEARD_ROWS; ++index) {
+        heard[index][0] = '\0';
+        if (1 + index < bird_count) {
+            wildlife_heard_row(&birds[1 + index], CYD_TEXT_COLUMNS, heard[index],
+                               sizeof(heard[index]));
+        }
     }
     const struct {
         uint16_t color;
@@ -1324,35 +802,18 @@ static void draw_bird_info(const bird_detection_t *bird, const bird_info_t *info
     } rows[CYD_TEXT_ROWS] = {
         {CYD_COLOR_YELLOW, name[0]},
         {CYD_COLOR_YELLOW, name[1]},
-        {CYD_COLOR_GRAY, bird->scientific_name},
-        {CYD_COLOR_CYAN, info->family[0] != '\0' ? info->family : "..."},
-        {CYD_COLOR_WHITE, heard},
-        {CYD_COLOR_WHITE, calls},
-        {CYD_COLOR_WHITE, info->weather[0] != '\0' ? info->weather : "..."},
-        {CYD_COLOR_WHITE, info->seen[0] != '\0' ? info->seen : "..."},
-        {CYD_COLOR_WHITE, info->since},
+        {CYD_COLOR_WHITE, latest->time},
+        {CYD_COLOR_WHITE, confidence},
+        {CYD_COLOR_GRAY, bird_count > 1 ? "also heard" : ""},
+        {CYD_COLOR_WHITE, heard[0]},
+        {CYD_COLOR_WHITE, heard[1]},
+        {CYD_COLOR_WHITE, heard[2]},
+        {CYD_COLOR_WHITE, heard[3]},
         {CYD_COLOR_GRAY, "tap for readings"},
     };
     for (int row = 0; row < CYD_TEXT_ROWS; ++row) {
         ESP_ERROR_CHECK(cyd_text_row(row, rows[row].color, CYD_COLOR_BLACK, rows[row].text));
     }
-}
-
-/* Shows what is known about the bird in the photo at once, then fills in
-   its family, the weather and its totals as they arrive. */
-static void show_bird_info(void)
-{
-    bird_info_t info = {0};
-    info_on_screen = true;
-    status_on_screen = false;
-    set_stage("showing info");
-    draw_bird_info(&displayed_bird, &info);
-    fetch_family(displayed_bird.scientific_name, info.family, sizeof(info.family));
-    draw_bird_info(&displayed_bird, &info);
-    fetch_weather(info.weather, sizeof(info.weather));
-    draw_bird_info(&displayed_bird, &info);
-    fetch_species_totals(displayed_bird.scientific_name, &info);
-    draw_bird_info(&displayed_bird, &info);
     set_stage("idle");
 }
 
@@ -1440,13 +901,18 @@ static void show_message(const char *first, const char *second)
     enter_timed_screen(SCREEN_MESSAGE, MESSAGE_TIMEOUT_US);
 }
 
-/* Answers a tap on the glance screen at once, then shows today's bird, or
-   says why there is none. */
+/* Answers a tap on the glance screen at once, then shows the latest bird's
+   photo, or its details when there is no photo, or says why there is no
+   bird. */
 static void show_bird_for_tap(void)
 {
-    draw_lines(CYD_COLOR_WHITE, "finding today's", "bird");
+    draw_lines(CYD_COLOR_WHITE, "finding the", "latest bird");
     if (!wifi_connected) {
         show_message("NO WI-FI", "");
+        return;
+    }
+    if (wildlife_url[0] == '\0') {
+        show_message("NO WILDLIFE CAM", "use phone setup");
         return;
     }
     char reason[STATUS_SIZE];
@@ -1454,15 +920,18 @@ static void show_bird_for_tap(void)
     case BIRD_SHOWN:
         enter_timed_screen(SCREEN_PHOTO, PHOTO_TIMEOUT_US);
         break;
+    case BIRD_NO_PHOTO:
+        show_bird_info();
+        enter_timed_screen(SCREEN_INFO, INFO_TIMEOUT_US);
+        break;
     case BIRD_NONE:
-        snprintf(reason, sizeof(reason), "today at %.0f%%+", MIN_BIRD_CONFIDENCE * 100);
-        show_message("NO BIRD YET", reason);
+        show_message("NO BIRDS YET", "");
         break;
     case BIRD_FAILED:
         portENTER_CRITICAL(&status_lock);
         memcpy(reason, server_status, sizeof(reason));
         portEXIT_CRITICAL(&status_lock);
-        show_message("BIRDNET ERROR", reason);
+        show_message("WILDLIFE ERROR", reason);
         break;
     }
 }
@@ -1569,11 +1038,10 @@ static const char *prepare_ha_request(void)
     return NULL;
 }
 
-/* Reads the Wi-Fi, BirdNET and Home Assistant settings from NVS; returns
-   false when there are no Wi-Fi settings yet. */
+/* Reads the Wi-Fi, wildlife camera and Home Assistant settings from NVS;
+   returns false when there are no Wi-Fi settings yet. */
 static bool load_config(void)
 {
-    snprintf(birdnet_base_url, sizeof(birdnet_base_url), "%s", DEFAULT_BIRDNET_BASE_URL);
     nvs_handle_t nvs;
     if (nvs_flash_init() != ESP_OK || nvs_open(CONFIG_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) {
         return false;
@@ -1585,10 +1053,9 @@ static bool load_config(void)
     if (nvs_get_str(nvs, "wifi_pass", wifi_password, &size) != ESP_OK) {
         wifi_password[0] = '\0';
     }
-    size = sizeof(birdnet_base_url);
-    if (nvs_get_str(nvs, "birdnet_url", birdnet_base_url, &size) != ESP_OK ||
-        birdnet_base_url[0] == '\0') {
-        snprintf(birdnet_base_url, sizeof(birdnet_base_url), "%s", DEFAULT_BIRDNET_BASE_URL);
+    size = sizeof(wildlife_url);
+    if (nvs_get_str(nvs, "wildlife_url", wildlife_url, &size) != ESP_OK) {
+        wildlife_url[0] = '\0';
     }
     size = sizeof(ha_url);
     if (nvs_get_str(nvs, "ha_url", ha_url, &size) != ESP_OK) {
@@ -1605,9 +1072,9 @@ static bool load_config(void)
         }
     }
     nvs_close(nvs);
-    strip_trailing_slashes(birdnet_base_url);
+    strip_trailing_slashes(wildlife_url);
     strip_trailing_slashes(ha_url);
-    ESP_LOGI(TAG, "BirdNET server: %s", birdnet_base_url);
+    ESP_LOGI(TAG, "Wildlife camera: %s", wildlife_url[0] != '\0' ? wildlife_url : "not set");
     ha_setup_problem = prepare_ha_request();
     if (ha_setup_problem != NULL) {
         set_ha_status("%s", ha_setup_problem);
@@ -1654,8 +1121,8 @@ static int64_t sooner(int64_t wake_us, int64_t deadline_us, int64_t now)
 
 /* Runs the screens. Home Assistant is asked on joining Wi-Fi and every
    HA_INTERVAL_US while the status page or the glance screen is up. A tap on
-   the glance screen shows today's bird, a tap on the photo its details, and
-   a tap on those, or a timeout, goes back to the glance screen. */
+   the glance screen shows the latest bird, a tap on the photo its details,
+   and a tap on those, or a timeout, goes back to the glance screen. */
 static void dashboard_task(void *argument)
 {
     (void)argument;
