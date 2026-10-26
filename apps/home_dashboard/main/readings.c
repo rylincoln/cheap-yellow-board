@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A temperature or current this large, either way, has more than three
+   digits and shows as "--". */
+#define DISPLAY_LIMIT 999.5
+
 int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out, size_t size)
 {
     int n = snprintf(out, size, "{\"template\":\"{%% for s in expand([");
@@ -104,7 +108,9 @@ bool reading_stale(const reading_t *reading, int64_t now_us)
 
 void format_temperature(const reading_t *reading, char *out, size_t size)
 {
-    if (!reading->available) {
+    /* Checked before lround, whose result past a long is unspecified; the
+       negated test also turns away NaN. */
+    if (!reading->available || !(fabs(reading->value) < DISPLAY_LIMIT)) {
         snprintf(out, size, "--");
         return;
     }
@@ -118,6 +124,10 @@ battery_direction_t format_battery(const reading_t *reading, char *out, size_t s
         return BATTERY_UNKNOWN;
     }
     double a = fabs(reading->value);
+    if (!(a < DISPLAY_LIMIT)) { /* before lround, as for temperatures */
+        snprintf(out, size, "--");
+        return BATTERY_UNKNOWN;
+    }
     if (a < 0.1) {
         snprintf(out, size, "0.0");
         return BATTERY_IDLE;
@@ -126,12 +136,7 @@ battery_direction_t format_battery(const reading_t *reading, char *out, size_t s
     if (tenth < 100.0) {
         snprintf(out, size, "%.1f", tenth);
     } else {
-        long whole = lround(a);
-        if (whole > 999) {
-            snprintf(out, size, "--");
-            return BATTERY_UNKNOWN;
-        }
-        snprintf(out, size, "%ld", whole);
+        snprintf(out, size, "%ld", lround(a));
     }
     return reading->value < 0 ? BATTERY_DRAINING : BATTERY_CHARGING;
 }

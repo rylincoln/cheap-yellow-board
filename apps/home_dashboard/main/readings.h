@@ -23,9 +23,9 @@ int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out
 int readings_apply(const char *reply, const char *const entity_ids[SENSOR_COUNT],
                    int64_t now_us, reading_t readings[SENSOR_COUNT]);
 bool reading_stale(const reading_t *reading, int64_t now_us);
-/* "66°" (UTF-8 degree sign), or "--" when unavailable. */
+/* "66°" (UTF-8 degree sign), or "--" when unavailable or 999.5 or more either way. */
 void format_temperature(const reading_t *reading, char *out, size_t size);
-/* Magnitude only: "3.9", "153", "0.0" or "--". */
+/* Magnitude only: "3.9", "153", "0.0", or "--" when unavailable or 999.5 A or more. */
 battery_direction_t format_battery(const reading_t *reading, char *out, size_t size);
 
 #endif

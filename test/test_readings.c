@@ -54,6 +54,11 @@ int main(void)
     temp(-12.6, true, "-13\xC2\xB0");
     temp(100.2, true, "100\xC2\xB0");
     temp(0, false, "--");
+    temp(999.4, true, "999\xC2\xB0");
+    temp(-999.4, true, "-999\xC2\xB0");
+    temp(999.5, true, "--");
+    temp(1e30, true, "--");
+    temp(-1e30, true, "--");
 
     batt(-3.876, true, "3.9", BATTERY_DRAINING);
     batt(90.52, true, "90.5", BATTERY_CHARGING);
@@ -64,5 +69,7 @@ int main(void)
     batt(999.4, true, "999", BATTERY_CHARGING);
     batt(1075.1, true, "--", BATTERY_UNKNOWN);
     batt(0, false, "--", BATTERY_UNKNOWN);
+    batt(1e30, true, "--", BATTERY_UNKNOWN);
+    batt(-1e30, true, "--", BATTERY_UNKNOWN);
     CHECK_DONE();
 }
