@@ -11,7 +11,7 @@ static const char *TAG = "glance";
 
 static uint16_t strip[CYD_LCD_MAX_WIDTH * STRIP_ROWS];
 /* The tiles on screen, byte for byte; zeroed when a draw fails. */
-static glance_tile_t drawn[SENSOR_COUNT];
+static glance_tile_t drawn[GLANCE_TILE_COUNT];
 
 /* Draws one tile a strip at a time: each strip starts as the tile's
    background, then every text crossing it is blended in. */
@@ -45,7 +45,7 @@ static esp_err_t draw_tile(const glance_tile_t *tile)
     return ESP_OK;
 }
 
-void glance_draw(const glance_tile_t tiles[SENSOR_COUNT], bool full)
+void glance_draw(const glance_tile_t tiles[GLANCE_TILE_COUNT], bool full)
 {
     if (full) {
         esp_err_t result = cyd_fill_rect(0, 0, cyd_lcd_width(), cyd_lcd_height(), CYD_COLOR_BLACK);
@@ -53,17 +53,17 @@ void glance_draw(const glance_tile_t tiles[SENSOR_COUNT], bool full)
             ESP_LOGE(TAG, "Could not clear the screen: %s", esp_err_to_name(result));
         }
     }
-    for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
-        if (!full && memcmp(&drawn[sensor], &tiles[sensor], sizeof(drawn[sensor])) == 0) {
+    for (int index = 0; index < GLANCE_TILE_COUNT; ++index) {
+        if (!full && memcmp(&drawn[index], &tiles[index], sizeof(drawn[index])) == 0) {
             continue;
         }
-        esp_err_t result = draw_tile(&tiles[sensor]);
+        esp_err_t result = draw_tile(&tiles[index]);
         if (result == ESP_OK) {
             /* memcpy rather than assignment, so padding is copied too. */
-            memcpy(&drawn[sensor], &tiles[sensor], sizeof(drawn[sensor]));
+            memcpy(&drawn[index], &tiles[index], sizeof(drawn[index]));
         } else {
-            memset(&drawn[sensor], 0, sizeof(drawn[sensor]));
-            ESP_LOGE(TAG, "Could not draw tile %d: %s", sensor, esp_err_to_name(result));
+            memset(&drawn[index], 0, sizeof(drawn[index]));
+            ESP_LOGE(TAG, "Could not draw tile %d: %s", index, esp_err_to_name(result));
         }
     }
 }

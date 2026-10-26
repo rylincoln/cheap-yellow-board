@@ -9,7 +9,7 @@
 #include "esp_err.h"
 #include "esp_wifi.h"
 
-#define PHONE_HA_SENSOR_COUNT 4 /* upstairs, downstairs, outside, battery */
+#define PHONE_HA_SENSOR_COUNT 5 /* upstairs, downstairs, outside, battery amps and % */
 
 /* What the page submits, and what it shows when drawn again. */
 typedef struct {

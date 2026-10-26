@@ -74,6 +74,7 @@ static const char *const HA_SENSOR_KEYS[SENSOR_COUNT] = {
     [SENSOR_DOWNSTAIRS] = "ha_downstairs",
     [SENSOR_OUTSIDE] = "ha_outside",
     [SENSOR_BATTERY] = "ha_battery",
+    [SENSOR_BATTERY_PCT] = "ha_battery_pct",
 };
 static char ha_url[128];
 static char ha_token[256];
@@ -83,6 +84,7 @@ static const char *const entity_ids[SENSOR_COUNT] = {
     [SENSOR_DOWNSTAIRS] = ha_entity_ids[SENSOR_DOWNSTAIRS],
     [SENSOR_OUTSIDE] = ha_entity_ids[SENSOR_OUTSIDE],
     [SENSOR_BATTERY] = ha_entity_ids[SENSOR_BATTERY],
+    [SENSOR_BATTERY_PCT] = ha_entity_ids[SENSOR_BATTERY_PCT],
 };
 static char ha_body[768];
 static char ha_reply[2048];
@@ -866,7 +868,11 @@ static bool fetch_readings(void)
         return false;
     }
     int found = readings_apply(ha_reply, entity_ids, esp_timer_get_time(), readings);
-    ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, SENSOR_COUNT);
+    int asked = 0;
+    for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
+        asked += ha_entity_ids[sensor][0] != '\0';
+    }
+    ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, asked);
     if (found == 0) {
         set_ha_status("no sensors found");
         update_status_screen();
@@ -880,9 +886,10 @@ static bool fetch_readings(void)
    cleared screen with full, else only those that changed. */
 static void draw_glance(bool full)
 {
-    static glance_tile_t tiles[SENSOR_COUNT];
+    static glance_tile_t tiles[GLANCE_TILE_COUNT];
     int64_t now = esp_timer_get_time();
-    glance_compose(LCD_WIDTH, LCD_HEIGHT, readings, now, tiles);
+    bool show_charge = ha_entity_ids[SENSOR_BATTERY_PCT][0] != '\0';
+    glance_compose(LCD_WIDTH, LCD_HEIGHT, readings, show_charge, now, tiles);
     glance_draw(tiles, full);
     glance_composed_us = now;
 }
@@ -1049,7 +1056,8 @@ static const char *prepare_ha_request(void)
     if (ha_token[0] == '\0') {
         return "no HA token";
     }
-    for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
+    /* The battery's charge is optional. */
+    for (int sensor = 0; sensor < SENSOR_BATTERY_PCT; ++sensor) {
         if (ha_entity_ids[sensor][0] == '\0') {
             return "no sensor IDs";
         }

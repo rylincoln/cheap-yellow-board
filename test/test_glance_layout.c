@@ -30,41 +30,61 @@ static int has(const glance_tile_t *t, const char *text, uint16_t color)
     return 0;
 }
 
+/* The battery strip's texts are centred as one line. */
+static void centred(const glance_tile_t *t)
+{
+    const glance_text_t *last = &t->texts[t->count - 1];
+    int left = t->texts[0].x - t->rect.x;
+    int right = t->rect.x + t->rect.w - (last->x + bigfont_text_width(last->font, last->text));
+    CHECK(left - right <= 1 && right - left <= 1);
+}
+
 static void worst(int w, int h)
 {
-    glance_tile_t tiles[SENSOR_COUNT];
+    glance_tile_t tiles[GLANCE_TILE_COUNT];
     double temps[4] = {-12.6, 100.2, -999.4, 999.4};
     for (int k = 0; k < 4; k++) {
-        reading_t r[SENSOR_COUNT] = {fresh(temps[k]), fresh(temps[k]), fresh(temps[k]), fresh(-153.0)};
-        glance_compose(w, h, r, NOW, tiles);
-        for (int s = 0; s < SENSOR_COUNT; s++) inside(&tiles[s]);
+        reading_t r[SENSOR_COUNT] = {fresh(temps[k]), fresh(temps[k]), fresh(temps[k]), fresh(-153.0), fresh(100)};
+        glance_compose(w, h, r, true, NOW, tiles);
+        for (int s = 0; s < GLANCE_TILE_COUNT; s++) inside(&tiles[s]);
     }
-    double bats[2] = {-153.0, 137.2};
-    for (int k = 0; k < 2; k++) {
-        reading_t r[SENSOR_COUNT] = {fresh(66), fresh(66), fresh(66), fresh(bats[k])};
-        glance_compose(w, h, r, NOW, tiles);
-        for (int s = 0; s < SENSOR_COUNT; s++) inside(&tiles[s]);
+    double bats[3] = {-153.0, 137.2, -999.4};
+    for (int k = 0; k < 3; k++) {
+        reading_t r[SENSOR_COUNT] = {fresh(66), fresh(66), fresh(66), fresh(bats[k]), fresh(100)};
+        glance_compose(w, h, r, true, NOW, tiles);
+        for (int s = 0; s < GLANCE_TILE_COUNT; s++) inside(&tiles[s]);
+        centred(&tiles[SENSOR_BATTERY]);
     }
     reading_t none[SENSOR_COUNT] = {{0}};
-    glance_compose(w, h, none, NOW, tiles);
-    for (int s = 0; s < SENSOR_COUNT; s++) inside(&tiles[s]);
+    glance_compose(w, h, none, true, NOW, tiles);
+    for (int s = 0; s < GLANCE_TILE_COUNT; s++) inside(&tiles[s]);
+}
+
+/* The battery strip's charge text and color when the charge reads pct. */
+static void charge(double pct, const char *want, uint16_t color)
+{
+    glance_tile_t tiles[GLANCE_TILE_COUNT];
+    reading_t r[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(-3.876), fresh(pct)};
+    glance_compose(480, 320, r, true, NOW, tiles);
+    CHECK(tiles[SENSOR_BATTERY].count == 4);
+    CHECK(has(&tiles[SENSOR_BATTERY], want, color));
 }
 
 /* The font the outside tile gives its number when outside reads t. */
 static const bigfont_t *outside_font(int w, int h, double t)
 {
-    glance_tile_t tiles[SENSOR_COUNT];
-    reading_t r[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(t), fresh(-3.876)};
-    glance_compose(w, h, r, NOW, tiles);
+    glance_tile_t tiles[GLANCE_TILE_COUNT];
+    reading_t r[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(t), fresh(-3.876), fresh(82.4)};
+    glance_compose(w, h, r, true, NOW, tiles);
     return tiles[SENSOR_OUTSIDE].texts[1].font;
 }
 
 /* The font an inside tile gives its number when it reads t. */
 static const bigfont_t *upstairs_font(int w, int h, double t)
 {
-    glance_tile_t tiles[SENSOR_COUNT];
-    reading_t r[SENSOR_COUNT] = {fresh(t), fresh(67), fresh(40), fresh(-3.876)};
-    glance_compose(w, h, r, NOW, tiles);
+    glance_tile_t tiles[GLANCE_TILE_COUNT];
+    reading_t r[SENSOR_COUNT] = {fresh(t), fresh(67), fresh(40), fresh(-3.876), fresh(82.4)};
+    glance_compose(w, h, r, true, NOW, tiles);
     return tiles[SENSOR_UPSTAIRS].texts[1].font;
 }
 
@@ -84,22 +104,29 @@ static void font_chain(int w, int h, const bigfont_t *outside, const bigfont_t *
 
 int main(void)
 {
-    glance_tile_t tiles[SENSOR_COUNT];
-    reading_t ok[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(-3.876)};
+    glance_tile_t tiles[GLANCE_TILE_COUNT];
+    reading_t ok[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(-3.876), fresh(82.4)};
+    uint16_t red = glance_rgb(0xFF, 0x8A, 0x7A), gray = glance_rgb(0x70, 0x70, 0x70);
+    uint16_t unit_gray = glance_rgb(0x9A, 0x9A, 0x9A), white = glance_rgb(0xE6, 0xE6, 0xE6);
 
-    glance_compose(480, 320, ok, NOW, tiles);
-    const rect_t want[SENSOR_COUNT] = {{4, 4, 212, 116}, {4, 124, 212, 116}, {220, 4, 256, 236}, {4, 244, 472, 72}};
-    for (int s = 0; s < SENSOR_COUNT; s++) {
+    glance_compose(480, 320, ok, true, NOW, tiles);
+    const rect_t want[GLANCE_TILE_COUNT] = {{4, 4, 212, 116}, {4, 124, 212, 116}, {220, 4, 256, 236}, {4, 244, 472, 72}};
+    for (int s = 0; s < GLANCE_TILE_COUNT; s++) {
         CHECK(tiles[s].rect.x == want[s].x && tiles[s].rect.y == want[s].y);
         CHECK(tiles[s].rect.w == want[s].w && tiles[s].rect.h == want[s].h);
         CHECK(tiles[s].background == glance_rgb(0x14, 0x14, 0x14));
     }
-    CHECK(has(&tiles[SENSOR_BATTERY], "\xE2\x96\xBC" "3.9", glance_rgb(0xFF, 0x8A, 0x7A)));
-    CHECK(has(&tiles[SENSOR_BATTERY], "draining", glance_rgb(0xFF, 0x8A, 0x7A)));
+    /* the current with its arrow, "A", the battery icon filled 8 tenths with "82", "%" */
+    CHECK(tiles[SENSOR_BATTERY].count == 4);
+    CHECK(has(&tiles[SENSOR_BATTERY], "\xE2\x96\xBC" "3.9", red));
+    CHECK(has(&tiles[SENSOR_BATTERY], "A", unit_gray));
+    CHECK(has(&tiles[SENSOR_BATTERY], "\xEE\x80\x88" "82", white));
+    CHECK(has(&tiles[SENSOR_BATTERY], "%", unit_gray));
+    centred(&tiles[SENSOR_BATTERY]);
     CHECK(tiles[SENSOR_OUTSIDE].texts[1].font == &bigfont_outside_480);
     CHECK(tiles[SENSOR_UPSTAIRS].texts[1].font == &bigfont_tile_480);
 
-    glance_compose(320, 240, ok, NOW, tiles);
+    glance_compose(320, 240, ok, true, NOW, tiles);
     CHECK(tiles[SENSOR_UPSTAIRS].rect.x == 3 && tiles[SENSOR_UPSTAIRS].rect.y == 3);
     CHECK(tiles[SENSOR_UPSTAIRS].rect.w == 141 && tiles[SENSOR_UPSTAIRS].rect.h == 87);
     CHECK(tiles[SENSOR_BATTERY].rect.x == 3 && tiles[SENSOR_BATTERY].rect.y == 183);
@@ -114,30 +141,50 @@ int main(void)
     worst(480, 320);
     worst(320, 240);
 
-    reading_t stale[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(-3.876)};
+    /* without a charge sensor, only the current, centred */
+    glance_compose(480, 320, ok, false, NOW, tiles);
+    CHECK(tiles[SENSOR_BATTERY].count == 2);
+    centred(&tiles[SENSOR_BATTERY]);
+    glance_compose(320, 240, ok, false, NOW, tiles);
+    CHECK(tiles[SENSOR_BATTERY].count == 2);
+    centred(&tiles[SENSOR_BATTERY]);
+
+    /* red at 20% and under; the icon fills to the nearest tenth */
+    charge(100, "\xEE\x80\x8A" "100", white);
+    charge(21, "\xEE\x80\x82" "21", white);
+    charge(20, "\xEE\x80\x82" "20", red);
+    charge(4, "\xEE\x80\x80" "4", red);
+    charge(101, "\xEE\x80\x80" "--", gray);
+
+    reading_t stale[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(-3.876), fresh(82.4)};
     stale[SENSOR_UPSTAIRS].reported_at_us = NOW - READING_STALE_US - 1;
-    glance_compose(480, 320, stale, NOW, tiles);
-    CHECK(tiles[SENSOR_UPSTAIRS].texts[1].color == glance_rgb(0x70, 0x70, 0x70));
+    stale[SENSOR_BATTERY_PCT].reported_at_us = NOW - READING_STALE_US - 1;
+    glance_compose(480, 320, stale, true, NOW, tiles);
+    CHECK(has(&tiles[SENSOR_BATTERY], "\xEE\x80\x88" "82", gray));
+    stale[SENSOR_BATTERY_PCT].available = false;
+    glance_compose(480, 320, stale, true, NOW, tiles);
+    CHECK(has(&tiles[SENSOR_BATTERY], "\xEE\x80\x80" "--", gray));
+    CHECK(tiles[SENSOR_UPSTAIRS].texts[1].color == gray);
     CHECK(tiles[SENSOR_DOWNSTAIRS].texts[1].color == glance_rgb(0xFF, 0xD3, 0x8A));
     CHECK(tiles[SENSOR_OUTSIDE].texts[1].color == glance_rgb(0x7F, 0xD4, 0xFF));
 
-    reading_t idle[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(0.05)};
-    glance_compose(480, 320, idle, NOW, tiles);
-    CHECK(has(&tiles[SENSOR_BATTERY], "0.0", glance_rgb(0x70, 0x70, 0x70)));
-    CHECK(has(&tiles[SENSOR_BATTERY], "idle", glance_rgb(0x70, 0x70, 0x70)));
+    /* idle: no arrow or bolt */
+    reading_t idle[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(0.05), fresh(82.4)};
+    glance_compose(480, 320, idle, true, NOW, tiles);
+    CHECK(has(&tiles[SENSOR_BATTERY], "0.0", gray));
     for (int i = 0; i < tiles[SENSOR_BATTERY].count; i++)
         CHECK((unsigned char)tiles[SENSOR_BATTERY].texts[i].text[0] != 0xE2);
 
-    reading_t chg[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(137.2)};
-    glance_compose(480, 320, chg, NOW, tiles);
-    CHECK(has(&tiles[SENSOR_BATTERY], "\xE2\x96\xB2" "137", glance_rgb(0x8A, 0xE6, 0x8A)));
+    reading_t chg[SENSOR_COUNT] = {fresh(66), fresh(67), fresh(40), fresh(137.2), fresh(82.4)};
+    glance_compose(480, 320, chg, true, NOW, tiles);
+    CHECK(has(&tiles[SENSOR_BATTERY], "\xE2\x9A\xA1" "137", glance_rgb(0x8A, 0xE6, 0x8A)));
 
     /* tiles compare whole with memcmp: padding is zeroed */
-    glance_tile_t a[SENSOR_COUNT], b[SENSOR_COUNT];
+    glance_tile_t a[GLANCE_TILE_COUNT], b[GLANCE_TILE_COUNT];
     memset(a, 0xAA, sizeof a);
     memset(b, 0x55, sizeof b);
-    glance_compose(480, 320, ok, NOW, a);
-    glance_compose(480, 320, ok, NOW, b);
+    glance_compose(480, 320, ok, true, NOW, a);
+    glance_compose(480, 320, ok, true, NOW, b);
     CHECK(memcmp(a, b, sizeof a) == 0);
     CHECK_DONE();
 }

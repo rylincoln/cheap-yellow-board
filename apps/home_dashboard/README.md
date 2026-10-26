@@ -6,7 +6,7 @@ It is the only app in this repository so far. The [root README](../../README.md)
 
 ## What it does
 
-The glance screen is the default. It shows big readings from Home Assistant: Upstairs and Downstairs stacked on the left, a large Outside on the right, and a strip along the bottom with the shop battery's current. The readings refresh every 30 seconds. A reading turns gray when Home Assistant hasn't heard from its sensor for 5 minutes. In the battery strip, a red down arrow means draining, a green up arrow means charging, and `idle` means under 0.1 A.
+The glance screen is the default. It shows big readings from Home Assistant: Upstairs and Downstairs stacked on the left, a large Outside on the right, and a strip along the bottom with the shop battery's current and charge. The readings refresh every 30 seconds. A reading turns gray when Home Assistant hasn't heard from its sensor for 5 minutes. In the battery strip, a red down arrow means draining, a green bolt means charging, and a gray current with neither means idle, under 0.1 A. The battery icon beside it fills to the charge, and the charge turns red at 20% and under. Without `ha_battery_pct` the strip shows only the current.
 
 Until the first good reply, a status page shows the Wi-Fi network and the Home Assistant state. Its messages are `no HA address`, `no HA token`, `no sensor IDs`, `HA 401 bad token`, `HA HTTP <code>` and `no sensors found`. If the network doesn't join, press EN to open the launcher and choose another.
 
@@ -25,7 +25,8 @@ The app has no credentials compiled in, so its binary is safe to publish. It rea
 | `wifi_ssid`, `wifi_pass` | Wi-Fi network |
 | `ha_url` | Home Assistant address, for example `http://homeassistant.local:8123` |
 | `ha_token` | A long-lived access token. It must belong to a Home Assistant admin user |
-| `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Sensor entity IDs, such as `sensor.some_name` |
+| `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery` | Sensor entity IDs, such as `sensor.some_name`. `ha_battery` is the battery's current in amps |
+| `ha_battery_pct` | Optional: the battery's charge sensor, in percent |
 | `wildlife_url` | Wildlife camera gallery, for example `http://192.168.1.50:8080` |
 
 Create the token at the bottom of the Home Assistant user's profile page, under Security, as a long-lived access token. The readings come from `POST /api/template`, which only admin users may call. A non-admin token shows `HA 401 bad token`, even though it can read `/api/states`. The token is therefore a full admin credential, sent in cleartext unless `ha_url` is `https`, so consider a dedicated admin user for the board.

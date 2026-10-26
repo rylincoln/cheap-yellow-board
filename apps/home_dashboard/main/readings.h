@@ -6,7 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { SENSOR_UPSTAIRS, SENSOR_DOWNSTAIRS, SENSOR_OUTSIDE, SENSOR_BATTERY, SENSOR_COUNT } sensor_t;
+/* SENSOR_BATTERY is the battery's current; SENSOR_BATTERY_PCT, its charge, is optional. */
+typedef enum {
+    SENSOR_UPSTAIRS, SENSOR_DOWNSTAIRS, SENSOR_OUTSIDE, SENSOR_BATTERY, SENSOR_BATTERY_PCT, SENSOR_COUNT
+} sensor_t;
 #define READING_STALE_US (300LL * 1000 * 1000)
 
 typedef struct {
@@ -17,9 +20,11 @@ typedef struct {
 
 typedef enum { BATTERY_IDLE, BATTERY_CHARGING, BATTERY_DRAINING, BATTERY_UNKNOWN } battery_direction_t;
 
-/* The JSON body for POST /api/template; length, or -1 if size is too small. */
+/* The JSON body for POST /api/template, leaving out empty entity IDs;
+   length, or -1 if size is too small. */
 int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out, size_t size);
-/* Sets every reading from one reply; returns how many are available. */
+/* Sets every reading from one reply; returns how many are available. A
+   sensor with an empty entity ID stays unavailable. */
 int readings_apply(const char *reply, const char *const entity_ids[SENSOR_COUNT],
                    int64_t now_us, reading_t readings[SENSOR_COUNT]);
 bool reading_stale(const reading_t *reading, int64_t now_us);
@@ -27,5 +32,8 @@ bool reading_stale(const reading_t *reading, int64_t now_us);
 void format_temperature(const reading_t *reading, char *out, size_t size);
 /* Magnitude only: "3.9", "153", "0.0", or "--" when unavailable or 999.5 A or more. */
 battery_direction_t format_battery(const reading_t *reading, char *out, size_t size);
+/* "82", without the sign, and returns that percent; "--" and -1 when
+   unavailable or outside -0.5 to 100.5. */
+int format_percent(const reading_t *reading, char *out, size_t size);
 
 #endif

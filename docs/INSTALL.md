@@ -94,7 +94,7 @@ The setup page also has an **Updates** field for the **update key**, which lets 
 The home dashboard needs:
 
 - **Home Assistant address and token.** For example `http://homeassistant.local:8123`. Create the token at the bottom of your Home Assistant user's profile page, under Security, as a long-lived access token. The token must belong to an admin user: the dashboard reads through `POST /api/template`, which is admin-only, and a non-admin token shows `HA 401 bad token`. That makes it a full admin credential, sent in cleartext unless the address is `https`, so consider a dedicated admin user for the board. Home Assistant 2024.3 or newer is needed.
-- **Four sensor IDs.** The entity IDs for upstairs, downstairs, outside and the battery current, such as `sensor.some_name`.
+- **Sensor IDs.** The entity IDs for upstairs, downstairs, outside and the battery current, such as `sensor.some_name`, and optionally the battery's charge in percent.
 - **Wildlife camera server.** The address of your wildlife-cam gallery, for example `http://192.168.1.50:8080`. Tapping the readings shows its latest bird.
 
 ## 6. Build

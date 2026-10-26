@@ -294,7 +294,7 @@ static bool store_or_erase(nvs_handle_t nvs, const char *key, const char *value)
 static bool save_phone_settings(const phone_settings_t *settings)
 {
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     char saved_ssid[33];
     char saved_password[65];
     char saved_ha_url[128];
@@ -1892,7 +1892,7 @@ static void draw_phone_qr(void)
 static bool phone_setup_screen(const network_list_t *list)
 {
     static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery"};
+        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     static phone_settings_t saved; /* the page keeps its own copy */
     char ssid[33];
     char update_key[40]; /* only whether one is set matters; never shown */

@@ -12,8 +12,12 @@
 int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out, size_t size)
 {
     int n = snprintf(out, size, "{\"template\":\"{%% for s in expand([");
+    bool first = true;
     for (int i = 0; i < SENSOR_COUNT && n >= 0 && (size_t)n < size; i++) {
-        n += snprintf(out + n, size - n, "%s'%s'", i ? "," : "", entity_ids[i]);
+        if (entity_ids[i][0] != '\0') {
+            n += snprintf(out + n, size - n, "%s'%s'", first ? "" : ",", entity_ids[i]);
+            first = false;
+        }
     }
     if (n >= 0 && (size_t)n < size) {
         n += snprintf(out + n, size - n,
@@ -66,7 +70,7 @@ static void apply_line(const char *line, size_t len, const char *const ids[SENSO
         return;
     }
     for (int i = 0; i < SENSOR_COUNT; i++) {
-        if (!seen[i] && strlen(ids[i]) == id_len && memcmp(ids[i], line, id_len) == 0) {
+        if (!seen[i] && id_len > 0 && strlen(ids[i]) == id_len && memcmp(ids[i], line, id_len) == 0) {
             readings[i].available = true;
             readings[i].value = value;
             readings[i].reported_at_us = now_us - age * 1000000LL;
@@ -139,4 +143,19 @@ battery_direction_t format_battery(const reading_t *reading, char *out, size_t s
         snprintf(out, size, "%ld", lround(a));
     }
     return reading->value < 0 ? BATTERY_DRAINING : BATTERY_CHARGING;
+}
+
+int format_percent(const reading_t *reading, char *out, size_t size)
+{
+    /* The negated test also turns away NaN. */
+    if (!reading->available || !(reading->value >= -0.5 && reading->value < 100.5)) {
+        snprintf(out, size, "--");
+        return -1;
+    }
+    int percent = (int)lround(reading->value);
+    if (percent < 0) {
+        percent = 0; /* -0.5 rounds away from zero */
+    }
+    snprintf(out, size, "%d", percent);
+    return percent;
 }
