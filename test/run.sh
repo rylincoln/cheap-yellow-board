@@ -26,4 +26,7 @@ build/host-tests/push_auth
 cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update test/test_image_desc.c components/cyd_update/image_desc.c -o build/host-tests/image_desc
 build/host-tests/image_desc
 
+cc -std=c11 -Wall -Wextra -Werror -Icomponents/cyd_update -Icomponents/json_scan/include test/test_update_rules.c components/cyd_update/update_rules.c components/json_scan/json_scan.c -o build/host-tests/update_rules
+build/host-tests/update_rules
+
 echo "host tests passed"
