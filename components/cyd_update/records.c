@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_image_format.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "nvs.h"
@@ -270,10 +271,23 @@ static bool read_partition_desc(const esp_partition_t *partition, image_desc_t *
     return true;
 }
 
+/* Whether the whole image in partition checks out, as the bootloader checks it. */
+static bool image_verifies(const esp_partition_t *partition)
+{
+    const esp_partition_pos_t position = {
+        .offset = partition->address,
+        .size = partition->size,
+    };
+    esp_image_metadata_t metadata;
+    return esp_image_verify(ESP_IMAGE_VERIFY_SILENT, &position, &metadata) == ESP_OK;
+}
+
 /* An image whose ELF SHA-256 isn't the one recorded for its partition was
    put there some other way: over USB, or by the launcher's own menu. Its
-   floor then comes from the commit time in its version. */
-static void check_partition(const esp_partition_t *partition)
+   floor then comes from the commit time in its version. running says
+   whether the partition holds the build that is running, which verified
+   when it started. */
+static void check_partition(const esp_partition_t *partition, bool running)
 {
     image_desc_t desc;
     if (!read_partition_desc(partition, &desc)) {
@@ -285,20 +299,31 @@ static void check_partition(const esp_partition_t *partition)
     if (kind_of(partition) == IMAGE_APP) {
         follow_app(desc.project, known ? record.commit_time : 0);
     }
-    if (!known) {
-        note(partition, &desc, SOURCE_USB, update_version_commit_time(desc.version));
+    if (known) {
+        return;
     }
+    /* An install cut off by a reset leaves a description that reads, ahead
+       of an image that doesn't. Taking it for a USB flash would set the
+       floor to the release being installed, which would then never be
+       tried again. */
+    if (!running && !image_verifies(partition)) {
+        ESP_LOGW(TAG, "%s holds an incomplete launcher; its floor stays, so the next check "
+                      "tries again",
+                 partition->label);
+        return;
+    }
+    note(partition, &desc, SOURCE_USB, update_version_commit_time(desc.version));
 }
 
 void records_check_usb(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
     if (running != NULL) {
-        check_partition(running);
+        check_partition(running, true);
     }
     const esp_partition_t *factory = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
     if (factory != NULL && (running == NULL || factory->address != running->address)) {
-        check_partition(factory);
+        check_partition(factory, false);
     }
 }

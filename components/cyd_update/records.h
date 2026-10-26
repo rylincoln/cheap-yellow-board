@@ -20,6 +20,8 @@ void records_set_seen(image_kind_t kind, int64_t release_time);
 void records_note_install(const esp_partition_t *partition, const image_desc_t *desc,
                           image_source_t source, int64_t commit_time, const char *launcher_version);
 void records_clear_slot(const esp_partition_t *partition); /* before erasing: the launcher's record too */
-void records_check_usb(void); /* running app and factory: an unknown ELF SHA-256 counts as a USB flash */
+/* Running app and factory: an unknown ELF SHA-256 counts as a USB flash,
+   in factory only when the whole image verifies. */
+void records_check_usb(void);
 
 #endif
