@@ -33,7 +33,7 @@ An app's `firmware.bin` goes to `0x150000` (slot A) or `0x2A0000` (slot B). Eras
 
 Run serial commands (esptool, monitor) with the Bash sandbox disabled. The board's CH340 port on this Mac sometimes wedges, failing every open with termios "Invalid argument" until the board is unplugged and replugged.
 
-There are no tests; a clean build is the check. After changing a project's `sdkconfig.defaults`, delete its generated `sdkconfig.esp32dev` so the new defaults apply.
+Run `sh test/run.sh` for the host-tested pure modules (plain C, built with the system `cc`), then a clean build. `tools/make_bigfont.py` regenerates `apps/home_dashboard/main/bigfont_data.c`; its docstring has the pinned command. After changing a project's `sdkconfig.defaults`, delete its generated `sdkconfig.esp32dev` so the new defaults apply.
 
 ## Architecture
 
