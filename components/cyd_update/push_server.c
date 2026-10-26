@@ -6,11 +6,6 @@
    is erased before that HMAC and the image's description check out. Every
    reply is one line of plain text, which the Mac prints. */
 
-/* TF-PSA-Crypto declares mbedtls_md_hmac only for code that asks for its
-   private identifiers, as some of ESP-IDF's own components do. This must
-   come before anything that includes mbedtls/md.h, such as install.h. */
-#define MBEDTLS_DECLARE_PRIVATE_IDENTIFIERS
-
 #include "push_server.h"
 
 #include <stdarg.h>
@@ -30,10 +25,10 @@
 #include "esp_timer.h"
 #include "image_desc.h"
 #include "install.h"
-#include "mbedtls/md.h"
 #include "mbedtls/platform_util.h"
 #include "mdns.h"
 #include "nvs.h"
+#include "psa/crypto.h"
 #include "push_auth.h"
 #include "update_internal.h"
 
@@ -167,6 +162,26 @@ static bool read_headers(httpd_req_t *request, push_t *push)
            push_auth_parse_hex32(hmac, push->hmac);
 }
 
+/* HMAC-SHA256 of the message, keyed with the key's characters. PSA holds
+   its own copy of the key for this one MAC, and destroying it wipes that. */
+static bool compute_hmac(const char *key, const char *message, size_t length, uint8_t mac[32])
+{
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_HMAC);
+    psa_set_key_algorithm(&attributes, PSA_ALG_HMAC(PSA_ALG_SHA_256));
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_SIGN_MESSAGE);
+    mbedtls_svc_key_id_t key_id = MBEDTLS_SVC_KEY_ID_INIT;
+    size_t mac_length = 0;
+    psa_status_t status =
+        psa_import_key(&attributes, (const uint8_t *)key, strlen(key), &key_id);
+    if (status == PSA_SUCCESS) {
+        status = psa_mac_compute(key_id, PSA_ALG_HMAC(PSA_ALG_SHA_256), (const uint8_t *)message,
+                                 length, mac, 32, &mac_length);
+    }
+    psa_destroy_key(key_id); /* does nothing when the import failed */
+    return status == PSA_SUCCESS && mac_length == 32;
+}
+
 /* Whether the Mac's HMAC is the one the key makes of this push. */
 static bool hmac_matches(const push_t *push, const char *key)
 {
@@ -174,10 +189,7 @@ static bool hmac_matches(const push_t *push, const char *key)
     size_t length = push_auth_message(message, sizeof(message), push->challenge, push->length,
                                       push->sha256_hex, push->project, push->commit_time);
     uint8_t expected[32];
-    bool matches = length > 0 &&
-                   mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-                                   (const unsigned char *)key, strlen(key),
-                                   (const unsigned char *)message, length, expected) == 0 &&
+    bool matches = length > 0 && compute_hmac(key, message, length, expected) &&
                    push_auth_equal(expected, push->hmac);
     mbedtls_platform_zeroize(expected, sizeof(expected));
     return matches;
