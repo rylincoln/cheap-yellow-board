@@ -18,7 +18,7 @@ Flash the launcher once over USB. On every power-on it shows the apps stored in 
 | Folder | Contents |
 |---|---|
 | [`launcher/`](launcher/README.md) | The launcher, its custom second-stage bootloader and the partition table |
-| [`apps/birdnet_viewer/`](apps/birdnet_viewer/README.md) | BirdNET bird photo viewer |
+| [`apps/home_dashboard/`](apps/home_dashboard/README.md) | Home Assistant readings, with the latest bird on a tap |
 | `components/cyd_display/` | Display, 5x7 font, patterns, touch and board detection, shared by every project |
 | [`docs/`](docs/INSTALL.md) | Installing the tools, building, flashing and publishing |
 

@@ -288,7 +288,7 @@ static bool store_or_erase(nvs_handle_t nvs, const char *key, const char *value)
    image. The page never shows the saved password or token, so a blank
    password keeps it when the network stays the same, and a blank token when
    the Home Assistant address does. A blank server, address or sensor goes
-   back to unset, and the BirdNET viewer's old server setting is erased.
+   back to unset, and the old server setting from the previous bird viewer is erased.
    Runs on the web server's task. */
 static bool save_phone_settings(const phone_settings_t *settings)
 {

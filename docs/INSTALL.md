@@ -78,7 +78,7 @@ The layout:
 | Folder | Contents | Published by CI |
 |---|---|---|
 | `launcher/` | Launcher (factory app), custom second-stage bootloader, partition table | No: flash it over USB once |
-| `apps/birdnet_viewer/` | BirdNET bird photo viewer | Yes |
+| `apps/home_dashboard/` | Home Assistant readings, with the latest bird on a tap | Yes |
 | `components/cyd_display/` | Shared display and touch driver, with board detection | Built into every project |
 | `docs/` | This guide | No |
 
@@ -86,7 +86,13 @@ The layout:
 
 ## 5. Wi-Fi settings live on the board
 
-There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the BirdNET server. The launcher saves the settings in the board's NVS storage, where every app reads them.
+There is nothing to create before building. The first time the launcher starts, it finds no saved network and opens its Wi-Fi chooser. Pick a network and type its password on the screen, or tap `PHONE SETUP` and do it from a phone: the board becomes a temporary access point named `CYD-Setup-XXXX` with a setup page that also takes the Home Assistant settings and the wildlife camera server. The launcher saves the settings in the board's NVS storage, where every app reads them.
+
+The home dashboard needs:
+
+- **Home Assistant address and token.** For example `http://homeassistant.local:8123`. Create the token at the bottom of your Home Assistant user's profile page, under Security, as a long-lived access token. The token must belong to an admin user: the dashboard reads through `POST /api/template`, which is admin-only, and a non-admin token shows `HA 401 bad token`.
+- **Four sensor IDs.** The entity IDs for upstairs, downstairs, outside and the battery current, such as `sensor.some_name`.
+- **Wildlife camera server.** The address of your wildlife-cam gallery, for example `http://192.168.1.50:8080`. Tapping the readings shows its latest bird.
 
 ## 6. Build
 
@@ -149,7 +155,7 @@ An app can also run on its own, without the launcher: `& $pio run --target uploa
 
 Push to `main`. The repository's one workflow, `.github/workflows/build.yml`, builds the launcher and every folder under `apps/` on GitHub Actions, on every push and pull request. On `main` it also uploads each app as `firmware.bin` to the release tagged with the app's folder name, creating the release the first time. On its next start, the launcher shows the new build as an update.
 
-To add a new application, copy an existing app folder (for example `apps/birdnet_viewer`), set `project(...)` in its `CMakeLists.txt` to the new folder name and change `build_dir` in `platformio.ini`, write the app in `main/`, and push. The workflow picks up the new folder by itself. The project name must match the folder name, or the launcher treats a downloaded copy as flashed over USB. Boot images must stay under 1.31 MB, the slot size, and must never contain credentials, because their binaries are public.
+To add a new application, copy an existing app folder (for example `apps/home_dashboard`), set `project(...)` in its `CMakeLists.txt` to the new folder name and change `build_dir` in `platformio.ini`, write the app in `main/`, and push. The workflow picks up the new folder by itself. The project name must match the folder name, or the launcher treats a downloaded copy as flashed over USB. Boot images must stay under 1.31 MB, the slot size, and must never contain credentials, because their binaries are public.
 
 The workflow needs the repository's Actions to have **read and write** permission for contents, so it can create releases. It asks for this with `permissions: contents: write`.
 
