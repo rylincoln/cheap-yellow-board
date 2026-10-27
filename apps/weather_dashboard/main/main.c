@@ -26,7 +26,7 @@
 /* The readings re-compose their tiles this often, so a reading turns gray
    on time without a fetch. */
 #define GLANCE_REDRAW_US (1000LL * 1000)
-/* Settings the launcher (bootloader branch) stores in NVS for boot images,
+/* Settings the launcher stores in NVS for boot images,
    so no credentials are compiled into this published binary. */
 #define CONFIG_NAMESPACE "cyd_config"
 /* Notification bits for the dashboard task. */
@@ -114,6 +114,9 @@ static void update_status_screen(void)
 
 /* When the readings last composed their tiles. */
 static int64_t glance_composed_us;
+/* Board time of the last good Home Assistant reply; every reading turns
+   gray when it gets old. Starts old, so nothing shows colored before one. */
+static int64_t last_reply_us = INT64_MIN / 2;
 
 /* Asks Home Assistant for the readings; returns true when at least one
    sensor is available. A failure only logs and sets the HA status, and
@@ -146,6 +149,7 @@ static bool fetch_readings(void)
         update_status_screen();
         return false;
     }
+    last_reply_us = esp_timer_get_time();
     board_status_set_ha("HA OK");
     return true;
 }
@@ -156,7 +160,7 @@ static void draw_glance(bool full)
 {
     static glance_tile_t tiles[WEATHER_TILE_COUNT];
     int64_t now = esp_timer_get_time();
-    weather_compose(LCD_WIDTH, LCD_HEIGHT, readings, now, tiles);
+    weather_compose(LCD_WIDTH, LCD_HEIGHT, readings, now, last_reply_us, tiles);
     glance_draw(tiles, WEATHER_TILE_COUNT, full);
     glance_composed_us = now;
 }

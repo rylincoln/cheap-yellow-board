@@ -61,7 +61,7 @@ static void set(reading_t r[WX_COUNT], reading_t t, reading_t h, reading_t l, re
 static void all_inside(int w, int h, const reading_t r[WX_COUNT])
 {
     glance_tile_t tiles[WEATHER_TILE_COUNT];
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     for (int s = 0; s < WEATHER_TILE_COUNT; s++) inside(&tiles[s]);
     centred(&tiles[TILE_SHED]);
 }
@@ -99,7 +99,7 @@ static const bigfont_t *temp_font(int w, int h, double t)
     glance_tile_t tiles[WEATHER_TILE_COUNT];
     reading_t r[WX_COUNT];
     set(r, fresh(t), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(82), fresh(64));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     const glance_text_t *g = find(&tiles[TILE_OUTSIDE], want);
     CHECK(g != NULL);
     return g ? g->font : NULL;
@@ -123,10 +123,12 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
     uint16_t white = glance_rgb(0xE6, 0xE6, 0xE6), red = glance_rgb(0xFF, 0x8A, 0x7A);
 
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(82.4), fresh(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_OUTSIDE], "OUTSIDE", unit_gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "47\xC2\xB0", blue));
-    CHECK(find(&tiles[TILE_OUTSIDE], "47\xC2\xB0")->font == temp);
+    const glance_text_t *big = find(&tiles[TILE_OUTSIDE], "47\xC2\xB0");
+    CHECK(big != NULL);
+    if (big) CHECK(big->font == temp);
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "58\xC2\xB0", amber));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "39\xC2\xB0", blue));
     CHECK(has(&tiles[TILE_OUTSIDE], "PAST 24 HOURS", unit_gray));
@@ -150,7 +152,7 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
 
     /* the widest strip keeps the 16 px of padding the font was sized for */
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(100), fresh(100));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     const glance_tile_t *shed = &tiles[TILE_SHED];
     const glance_text_t *last = &shed->texts[shed->count - 1];
     CHECK(shed->texts[0].x - shed->rect.x >= 8);
@@ -160,7 +162,7 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
 
     /* old temp and charge go gray; the rest keep their colors */
     set(r, old(47), old(58), old(39), old(0.12), old(1.48), old(82.4), old(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_OUTSIDE], "47\xC2\xB0", gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "58\xC2\xB0", amber));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "39\xC2\xB0", blue));
@@ -169,27 +171,27 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "64", amber));
     /* stale wins over low */
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), old(10), fresh(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x81" "10", gray));
 
     /* dry and missing rain are gray */
     set(r, fresh(47), fresh(58), fresh(39), fresh(0), gone(), fresh(82.4), fresh(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_RAIN_TODAY], "0.00", gray));
     CHECK(has(&tiles[TILE_RAIN_WEEK], "--", gray));
 
     /* red at 20% and under */
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(20), fresh(20));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x82" "20", red));
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "20", red));
     r[WX_SHED_PCT] = fresh(21);
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x82" "21", white));
 
     /* missing charge: an empty battery and "--" in gray */
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), gone(), gone());
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x80" "--", gray));
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "--", gray));
 
@@ -197,23 +199,57 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
     double below[3] = {-12, -1e10, -INFINITY};
     for (int k = 0; k < 3; k++) {
         set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(50), fresh(below[k]));
-        weather_compose(w, h, r, NOW, tiles);
+        weather_compose(w, h, r, NOW, NOW, tiles);
         CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "0", red));
     }
     r[WX_SHED_DAWN] = fresh(NAN);
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "--", gray));
+
+    /* a dawn forecast above 100.5 reads 100; NaN stays "--" */
+    set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(50), fresh(101.2));
+    weather_compose(w, h, r, NOW, NOW, tiles);
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "100", amber));
+    r[WX_SHED_DAWN] = fresh(NAN);
+    weather_compose(w, h, r, NOW, NOW, tiles);
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "--", gray));
+
+    /* out of touch with Home Assistant for over 30 minutes: every value is gray */
+    set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(15), fresh(9));
+    weather_compose(w, h, r, NOW, NOW - WX_REPLY_STALE_US - 1, tiles);
+    CHECK(has(&tiles[TILE_OUTSIDE], "OUTSIDE", unit_gray));
+    CHECK(has(&tiles[TILE_OUTSIDE], "47\xC2\xB0", gray));
+    CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "58\xC2\xB0", gray));
+    CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "39\xC2\xB0", gray));
+    CHECK(has(&tiles[TILE_OUTSIDE], "PAST 24 HOURS", unit_gray));
+    CHECK(has(&tiles[TILE_RAIN_TODAY], "0.12", gray));
+    CHECK(has(&tiles[TILE_RAIN_TODAY], "in", unit_gray));
+    CHECK(has(&tiles[TILE_RAIN_WEEK], "1.48", gray));
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x82" "15", gray));
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "9", gray));
+    CHECK(has(&tiles[TILE_SHED], "\xE2\x86\x92", gray));
+    CHECK(has(&tiles[TILE_SHED], "SHED", unit_gray));
+    CHECK(has(&tiles[TILE_SHED], "AT DAWN", unit_gray));
+    /* exactly 30 minutes is still fine */
+    weather_compose(w, h, r, NOW, NOW - WX_REPLY_STALE_US, tiles);
+    CHECK(has(&tiles[TILE_OUTSIDE], "47\xC2\xB0", blue));
+    CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "58\xC2\xB0", amber));
+    CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "39\xC2\xB0", blue));
+    CHECK(has(&tiles[TILE_RAIN_TODAY], "0.12", white));
+    CHECK(has(&tiles[TILE_RAIN_WEEK], "1.48", white));
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x82" "15", red));
+    CHECK(has(&tiles[TILE_SHED], "\xEE\x80\x90" "9", red));
 
     /* high and low sensors not made yet */
     set(r, fresh(47), gone(), gone(), fresh(0.12), fresh(1.48), fresh(82.4), fresh(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "--", gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "--", gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "47\xC2\xB0", blue));
 
     /* an available reading that formats as "--" is gray */
     set(r, fresh(NAN), fresh(1000), fresh(-1000), fresh(0.12), fresh(1.48), fresh(82.4), fresh(64.2));
-    weather_compose(w, h, r, NOW, tiles);
+    weather_compose(w, h, r, NOW, NOW, tiles);
     CHECK(has(&tiles[TILE_OUTSIDE], "--", gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xB2" "--", gray));
     CHECK(has(&tiles[TILE_OUTSIDE], "\xE2\x96\xBC" "--", gray));
@@ -223,8 +259,8 @@ static void groups(int w, int h, const bigfont_t *temp, const bigfont_t *mid, co
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(82.4), fresh(64.2));
     memset(a, 0xAA, sizeof a);
     memset(b, 0x55, sizeof b);
-    weather_compose(w, h, r, NOW, a);
-    weather_compose(w, h, r, NOW, b);
+    weather_compose(w, h, r, NOW, NOW, a);
+    weather_compose(w, h, r, NOW, NOW, b);
     CHECK(memcmp(a, b, sizeof a) == 0);
 
     worst(w, h);
@@ -236,14 +272,14 @@ int main(void)
     reading_t r[WX_COUNT];
 
     set(r, fresh(47), fresh(58), fresh(39), fresh(0.12), fresh(1.48), fresh(82.4), fresh(64.2));
-    weather_compose(480, 320, r, NOW, tiles);
+    weather_compose(480, 320, r, NOW, NOW, tiles);
     const rect_t want[WEATHER_TILE_COUNT] = {{4, 4, 288, 236}, {296, 4, 180, 116}, {296, 124, 180, 116}, {4, 244, 472, 72}};
     for (int s = 0; s < WEATHER_TILE_COUNT; s++) {
         CHECK(tiles[s].rect.x == want[s].x && tiles[s].rect.y == want[s].y);
         CHECK(tiles[s].rect.w == want[s].w && tiles[s].rect.h == want[s].h);
         CHECK(tiles[s].background == glance_rgb(0x14, 0x14, 0x14));
     }
-    weather_compose(320, 240, r, NOW, tiles);
+    weather_compose(320, 240, r, NOW, NOW, tiles);
     CHECK(tiles[TILE_OUTSIDE].rect.x == 3 && tiles[TILE_SHED].rect.y == 183);
     CHECK(tiles[TILE_SHED].rect.w == 315 && tiles[TILE_SHED].rect.h == 54);
 

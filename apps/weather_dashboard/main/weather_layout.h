@@ -15,9 +15,14 @@ typedef enum { TILE_OUTSIDE, TILE_RAIN_TODAY, TILE_RAIN_WEEK, TILE_SHED, WEATHER
 /* The request buffer for WX_COUNT entity IDs of 95 characters. */
 #define WX_BODY_SIZE 1024
 
-/* Zeroes tiles first, so whole tiles compare with memcmp. Only the
-   temperature and the shed charge go gray when old. */
+/* Every reading turns gray when the last good Home Assistant reply is older than this. */
+#define WX_REPLY_STALE_US (30LL * 60 * 1000 * 1000)
+
+/* Zeroes tiles first, so whole tiles compare with memcmp. The temperature
+   and the shed charge go gray when their sensor is old; every value goes
+   gray when last_reply_us, the board time of the last good Home Assistant
+   reply, is older than WX_REPLY_STALE_US. */
 void weather_compose(int width, int height, const reading_t readings[WX_COUNT], int64_t now_us,
-                     glance_tile_t tiles[WEATHER_TILE_COUNT]);
+                     int64_t last_reply_us, glance_tile_t tiles[WEATHER_TILE_COUNT]);
 
 #endif
