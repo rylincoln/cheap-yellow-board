@@ -80,6 +80,8 @@ The layout:
 | `launcher/` | Launcher (factory app), custom second-stage bootloader, partition table | Yes, as `firmware.bin` on the release tagged `launcher` |
 | `tools/` | `cyd_push.py`, which `pio run -t upload` uses to push a build over the network | No |
 | `apps/home_dashboard/` | Home Assistant readings, with the latest bird on a tap | Yes |
+| `apps/weather_dashboard/` | Outside temperature, rain and a shed battery from Home Assistant, with the latest bird on a tap | Yes |
+| `components/ha_glance/`, `components/wildlife/` | Home Assistant readings and tiles, and birds on tap, shared by both dashboards | Built into each dashboard |
 | `components/cyd_display/` | Shared display and touch driver, with board detection | Built into every project |
 | `docs/` | This guide | No |
 
