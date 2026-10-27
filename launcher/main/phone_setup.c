@@ -19,12 +19,17 @@
 #define SSID_MAX 32
 #define PASSWORD_MAX 64
 #define URL_MAX 127   /* home_dashboard keeps each address in 128 bytes */
-#define FORM_MAX 3584 /* every field, percent-encoded */
+#define FORM_MAX 5632 /* every field, percent-encoded */
 #define TOKEN_MAX 255
 #define DNS_PORT 53
 #define DNS_PACKET_MAX 512
 
 static const char *TAG = "phone_setup";
+
+const char *const PHONE_HA_SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
+    "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct",
+    "ha_wx_temp", "ha_wx_high", "ha_wx_low", "ha_rain_today", "ha_rain_week",
+    "ha_shed_pct", "ha_shed_dawn"};
 
 typedef struct {
     char ssid[SSID_MAX + 1];
@@ -136,6 +141,7 @@ static const char PAGE_HEAD[] =
     "main{max-width:420px;margin:auto}h1{font-size:22px;margin:0 0 4px}"
     "p{margin:0 0 14px;color:#445}small{color:#667}"
     "h2{font-size:18px;margin:28px 0 0}"
+    "h3{font-size:15px;margin:20px 0 0;color:#445}"
     "label{display:block;font-size:13px;color:#445;margin:16px 0 4px}"
     "input{box-sizing:border-box;width:100%;font-size:17px;padding:10px;"
     "border:1px solid #c9ced6;border-radius:8px;background:#fff;color:#111}"
@@ -252,16 +258,20 @@ static void send_form(httpd_req_t *request, const char *error,
         httpd_resp_sendstr_chunk(request, "<small>Blank keeps the saved token while the "
                                           "address stays the same.</small>");
     }
-    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     static const char *const SENSOR_LABELS[PHONE_HA_SENSOR_COUNT] = {
         "Upstairs", "Downstairs", "Outside", "Shop battery amps",
-        "Shop battery % (optional)"};
+        "Shop battery % (optional)", "Outside temperature", "High, past 24 hours",
+        "Low, past 24 hours", "Rain today", "Rain this week", "Shed battery %",
+        "Shed battery % at dawn"};
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
+        if (i == 0 || i == 5) {
+            httpd_resp_sendstr_chunk(request, i == 0 ? "<h3>Home dashboard</h3>"
+                                                     : "<h3>Weather dashboard</h3>");
+        }
         httpd_resp_sendstr_chunk(request, "<label>");
         httpd_resp_sendstr_chunk(request, SENSOR_LABELS[i]);
         httpd_resp_sendstr_chunk(request, "</label><input name=\"");
-        httpd_resp_sendstr_chunk(request, SENSOR_KEYS[i]);
+        httpd_resp_sendstr_chunk(request, PHONE_HA_SENSOR_KEYS[i]);
         httpd_resp_sendstr_chunk(
             request, "\" maxlength=\"95\" autocapitalize=\"none\" autocorrect=\"off\" "
                      "spellcheck=\"false\" placeholder=\"sensor.some_name\" value=\"");
@@ -350,8 +360,6 @@ static esp_err_t save_post(httpd_req_t *request)
     }
     form[received] = '\0';
 
-    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     bool ssid_ok = form_field(form, "ssid", submitted.ssid, sizeof(submitted.ssid));
     bool password_ok = form_field(form, "pass", submitted.password, sizeof(submitted.password)) &&
                        form_password_valid(submitted.password);
@@ -368,7 +376,7 @@ static esp_err_t save_post(httpd_req_t *request)
         form_update_key_normalize(submitted.update_key);
     bool sensors_ok = true;
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
-        sensors_ok = form_field(form, SENSOR_KEYS[i], submitted.ha_sensors[i],
+        sensors_ok = form_field(form, PHONE_HA_SENSOR_KEYS[i], submitted.ha_sensors[i],
                                 sizeof(submitted.ha_sensors[i])) &&
                      form_entity_id_valid(submitted.ha_sensors[i]) && sensors_ok;
     }

@@ -9,7 +9,8 @@
 #include "esp_err.h"
 #include "esp_wifi.h"
 
-#define PHONE_HA_SENSOR_COUNT 5 /* upstairs, downstairs, outside, battery amps and % */
+/* The home dashboard's five sensors, then the weather dashboard's seven. */
+#define PHONE_HA_SENSOR_COUNT 12
 
 /* What the page submits, and what it shows when drawn again. */
 typedef struct {
@@ -21,6 +22,9 @@ typedef struct {
     char ha_sensors[PHONE_HA_SENSOR_COUNT][96];
     char update_key[40];
 } phone_settings_t;
+
+/* The NVS key of each sensor field, in page order. */
+extern const char *const PHONE_HA_SENSOR_KEYS[PHONE_HA_SENSOR_COUNT];
 
 /* Stores what the page submitted, on the web server's task. The password is
    empty when the phone left the field blank, and so is the token. */

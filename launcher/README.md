@@ -33,6 +33,7 @@ No binary carries credentials, the launcher included. The launcher and every boo
 | `update_key` | Phone setup's Updates field, or the first push to a board without one: the key `tools/cyd_push.py --new-key` makes, which signs pushes from the Mac |
 | `ha_url`, `ha_token` | Phone setup: the Home Assistant address and a long-lived access token from an admin user |
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery`, `ha_battery_pct` | Phone setup: the sensor entity IDs, such as `sensor.some_name`. `ha_battery` is the battery's current; `ha_battery_pct`, its charge in percent, is optional |
+| `ha_wx_temp`, `ha_wx_high`, `ha_wx_low`, `ha_rain_today`, `ha_rain_week`, `ha_shed_pct`, `ha_shed_dawn` | Phone setup: the weather dashboard's sensor entity IDs, such as `sensor.some_name`. The outside temperature, its high and low over the past 24 hours, rain today and this week, and the shed battery's charge now and forecast at dawn. All seven are required |
 
 To update the launcher without losing these settings, write only its `firmware.bin` to `0x10000` with esptool and do not erase the flash.
 
