@@ -1,6 +1,5 @@
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 
 #include "board_status.h"
@@ -141,11 +140,7 @@ static bool fetch_readings(void)
         return false;
     }
     int found = readings_apply(ha_reply, entity_ids, WX_COUNT, esp_timer_get_time(), readings);
-    int asked = 0;
-    for (int sensor = 0; sensor < WX_COUNT; ++sensor) {
-        asked += ha_entity_ids[sensor][0] != '\0';
-    }
-    ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, asked);
+    ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, WX_COUNT);
     if (found == 0) {
         board_status_set_ha("no sensors found");
         update_status_screen();
