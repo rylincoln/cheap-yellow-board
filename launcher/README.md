@@ -29,7 +29,7 @@ No binary carries credentials, the launcher included. The launcher and every boo
 | Key | Set by |
 |---|---|
 | `wifi_ssid`, `wifi_pass` | The launcher's network chooser or phone setup |
-| `wildlife_url` | Phone setup: the wildlife camera gallery, such as `http://192.168.1.50:8080` |
+| `wildlife_url` | Phone setup: the wildlife camera gallery, such as `http://192.168.1.50:8080`, whose latest bird either dashboard shows on a tap |
 | `update_key` | Phone setup's Updates field, or the first push to a board without one: the key `tools/cyd_push.py --new-key` makes, which signs pushes from the Mac |
 | `ha_url`, `ha_token` | Phone setup: the Home Assistant address and a long-lived access token from an admin user |
 | `ha_upstairs`, `ha_downstairs`, `ha_outside`, `ha_battery`, `ha_battery_pct` | Phone setup: the sensor entity IDs, such as `sensor.some_name`. `ha_battery` is the battery's current; `ha_battery_pct`, its charge in percent, is optional |

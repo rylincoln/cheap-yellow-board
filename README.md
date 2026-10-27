@@ -19,7 +19,7 @@ Flash the launcher once over USB; after that, new builds arrive over Wi-Fi. On e
 |---|---|
 | [`launcher/`](launcher/README.md) | The launcher, its custom second-stage bootloader and the partition table |
 | [`apps/home_dashboard/`](apps/home_dashboard/README.md) | Home Assistant readings, with the latest bird on a tap |
-| [`apps/weather_dashboard/`](apps/weather_dashboard/README.md) | Outside temperature, rain and a shed battery, from Home Assistant |
+| [`apps/weather_dashboard/`](apps/weather_dashboard/README.md) | Outside temperature, rain and a shed battery, from Home Assistant, with the latest bird on a tap |
 | `components/ha_glance/` | Home Assistant readings and tile drawing shared by both dashboards |
 | `components/wildlife/` | The wildlife camera's latest bird, its photo and details, shared by both dashboards |
 | `components/cyd_display/` | Display, 5x7 font, patterns, touch and board detection, shared by every project |

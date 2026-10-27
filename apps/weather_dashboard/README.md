@@ -1,6 +1,6 @@
 # ESP32 CYD Weather Dashboard
 
-PlatformIO/ESP-IDF application for the 320x240 or 480x320 display and resistive touchscreen on the ESP32 Cheap Yellow Display (CYD). It is a second boot image, meant for a board that shows the weather outside and a shed battery. The [root README](../../README.md) describes the launcher that runs it.
+PlatformIO/ESP-IDF application for the 320x240 or 480x320 display and resistive touchscreen on the ESP32 Cheap Yellow Display (CYD). It is a second boot image, meant for a board that shows the weather outside and a shed battery, with the latest bird from a wildlife camera on a tap. The [root README](../../README.md) describes the launcher that runs it.
 
 ## What it shows
 
@@ -12,7 +12,13 @@ The readings screen comes from Home Assistant and refreshes every 30 seconds:
 
 Colors: the temperature is blue, the high amber, the low blue, rain light gray and the shed charge light gray; the dawn forecast is amber. Gray means no data, or no rain: a reading that is missing shows `--` in gray, a dry rain tile is gray, and the temperature and the shed charge turn gray when Home Assistant hasn't heard from their sensor for 5 minutes. If the board hasn't heard from Home Assistant for 30 minutes, every number turns gray. A charge, or a dawn forecast, of 20% and under turns red. A dawn forecast below zero means the battery runs out, so it reads `0` in red.
 
-A tap on the readings does nothing. Until the first good reply, a status page shows the Wi-Fi network and the Home Assistant state; a tap on it asks Home Assistant again now. Its messages are `no HA address`, `no HA token`, `no sensor IDs`, `sensor IDs too long`, `HA 401 bad token`, `HA HTTP <code>` and `no sensors found`. If the network doesn't join, press EN to open the launcher and choose another. Without Wi-Fi settings, the screen says `NO WI-FI SETTINGS`.
+Until the first good reply, a status page shows the Wi-Fi network and the Home Assistant state; a tap on it asks Home Assistant again now. Its messages are `no HA address`, `no HA token`, `no sensor IDs`, `sensor IDs too long`, `HA 401 bad token`, `HA HTTP <code>` and `no sensors found`. If the network doesn't join, press EN to open the launcher and choose another. Without Wi-Fi settings, the screen says `NO WI-FI SETTINGS`.
+
+### Birds on tap
+
+Tap the readings to see the latest bird from your wildlife camera gallery, as on the home dashboard. The newest bird's species photo fills the screen, with its aspect kept. Tap again for its details: name, time, confidence and `also heard` with the next birds. Tap once more to return to the readings. Without a tap, the photo or details return to the readings after 30 seconds. The readings keep refreshing meanwhile, and come back up to date.
+
+The messages are `NO WI-FI`, `NO WILDLIFE CAM / use phone setup`, `NO BIRDS YET` and `WILDLIFE ERROR / <reason>`.
 
 ## Settings
 
@@ -28,6 +34,7 @@ The app has no credentials compiled in, so its binary is safe to publish. It rea
 | `ha_rain_today`, `ha_rain_week` | Rain so far today and this week, in inches |
 | `ha_shed_pct` | The shed battery's charge, in percent |
 | `ha_shed_dawn` | The forecast charge at dawn, in percent |
+| `wildlife_url` | Optional: the wildlife camera gallery, for example `http://192.168.1.50:8080`. Without it a tap says `NO WILDLIFE CAM` |
 
 All seven sensor IDs are required; until they are set the status page says `no sensor IDs`.
 

@@ -10,6 +10,7 @@
 #include "ha_client.h"
 #include "readings.h"
 #include "weather_layout.h"
+#include "wildlife_view.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -20,8 +21,7 @@
 
 #define LCD_WIDTH CYD_LCD_WIDTH
 #define LCD_HEIGHT CYD_LCD_HEIGHT
-/* Home Assistant is asked this often while the status page or the readings
-   are up. */
+/* Home Assistant is asked this often, a bird on the screen or not. */
 #define HA_INTERVAL_US (30LL * 1000 * 1000)
 /* The readings re-compose their tiles this often, so a reading turns gray
    on time without a fetch. */
@@ -34,11 +34,20 @@
 #define WIFI_JOINED_BIT BIT1
 /* An update wants the screen; see cyd_update_lend_screen. */
 #define UPDATE_BIT BIT2
+/* A tap on the photo shows the bird's details this long, or until the next tap. */
+#define INFO_TIMEOUT_US (30LL * 1000 * 1000)
+/* The photo, and a message saying why there is none, give way to the
+   readings after these. */
+#define PHOTO_TIMEOUT_US (30LL * 1000 * 1000)
+#define MESSAGE_TIMEOUT_US (5LL * 1000 * 1000)
 
 static const char *TAG = "weather_dashboard";
 
 static char wifi_ssid[33];
 static char wifi_password[65];
+/* The wildlife camera gallery's address, without a trailing slash; empty
+   until phone setup stores one. */
+static char wildlife_url[WILDLIFE_URL_SIZE];
 static TaskHandle_t app_task_handle;
 
 /* Home Assistant settings, the request built from them once, its reply,
@@ -93,10 +102,14 @@ static void draw_status(void)
 }
 
 /* What the screen shows. The status page gives way to the readings at the
-   first reply and never comes back. */
+   first reply and never comes back; PHOTO, INFO and MESSAGE go back to the
+   readings on a tap or a timeout. */
 typedef enum {
     SCREEN_STATUS,
     SCREEN_GLANCE,
+    SCREEN_PHOTO,
+    SCREEN_INFO,
+    SCREEN_MESSAGE,
 } screen_t;
 
 static screen_t screen = SCREEN_STATUS;
@@ -112,6 +125,8 @@ static void update_status_screen(void)
 
 /* ---- Home Assistant and the readings ---- */
 
+/* When PHOTO, INFO or MESSAGE gives way to the readings. */
+static int64_t screen_until_us;
 /* When the readings last composed their tiles. */
 static int64_t glance_composed_us;
 /* Board time of the last good Home Assistant reply; every reading turns
@@ -174,6 +189,35 @@ static void enter_glance(void)
     draw_glance(true);
 }
 
+/* Moves to a screen that gives way to the readings after timeout_us. */
+static void enter_timed_screen(screen_t next, int64_t timeout_us)
+{
+    screen = next;
+    screen_until_us = esp_timer_get_time() + timeout_us;
+    cyd_update_set_interruptible(false);
+}
+
+/* Answers a tap on the readings at once, then shows the latest bird's
+   photo, or its details when there is no photo, or says why there is no
+   bird. */
+static void show_bird_for_tap(void)
+{
+    /* The readings are gone from here on, though the timed screen starts
+       only once the bird is found. */
+    cyd_update_set_interruptible(false);
+    switch (wildlife_show_for_tap(wildlife_url)) {
+    case WILDLIFE_PHOTO:
+        enter_timed_screen(SCREEN_PHOTO, PHOTO_TIMEOUT_US);
+        break;
+    case WILDLIFE_INFO:
+        enter_timed_screen(SCREEN_INFO, INFO_TIMEOUT_US);
+        break;
+    case WILDLIFE_MESSAGE:
+        enter_timed_screen(SCREEN_MESSAGE, MESSAGE_TIMEOUT_US);
+        break;
+    }
+}
+
 /* Passes taps from the shared touchscreen driver to the dashboard task. */
 static void touch_task(void *argument)
 {
@@ -220,8 +264,8 @@ static const char *prepare_ha_request(void)
     return NULL;
 }
 
-/* Reads the Wi-Fi and Home Assistant settings from NVS; returns false when
-   there are no Wi-Fi settings yet. */
+/* Reads the Wi-Fi, wildlife camera and Home Assistant settings from NVS;
+   returns false when there are no Wi-Fi settings yet. */
 static bool load_config(void)
 {
     nvs_handle_t nvs;
@@ -234,6 +278,10 @@ static bool load_config(void)
     size = sizeof(wifi_password);
     if (nvs_get_str(nvs, "wifi_pass", wifi_password, &size) != ESP_OK) {
         wifi_password[0] = '\0';
+    }
+    size = sizeof(wildlife_url);
+    if (nvs_get_str(nvs, "wildlife_url", wildlife_url, &size) != ESP_OK) {
+        wildlife_url[0] = '\0';
     }
     size = sizeof(ha_url);
     if (nvs_get_str(nvs, "ha_url", ha_url, &size) != ESP_OK) {
@@ -250,7 +298,9 @@ static bool load_config(void)
         }
     }
     nvs_close(nvs);
+    strip_trailing_slashes(wildlife_url);
     strip_trailing_slashes(ha_url);
+    ESP_LOGI(TAG, "Wildlife camera: %s", wildlife_url[0] != '\0' ? wildlife_url : "not set");
     ha_setup_problem = prepare_ha_request();
     if (ha_setup_problem != NULL) {
         board_status_set_ha("%s", ha_setup_problem);
@@ -266,19 +316,28 @@ static int64_t sooner(int64_t wake_us, int64_t deadline_us, int64_t now)
     return deadline_us > now && deadline_us < wake_us ? deadline_us : wake_us;
 }
 
-/* Puts the screen back in full after an update has drawn over it. */
+/* Puts the screen back in full after an update has drawn over it. A timed
+   screen isn't worth bringing back. */
 static void redraw_after_update(void)
 {
-    if (screen == SCREEN_STATUS) {
+    switch (screen) {
+    case SCREEN_STATUS:
         draw_status();
-    } else {
+        break;
+    case SCREEN_GLANCE:
         draw_glance(true);
+        break;
+    default:
+        enter_glance();
+        break;
     }
 }
 
 /* Runs the screens. Home Assistant is asked on joining Wi-Fi and every
-   HA_INTERVAL_US while the status page or the readings are up. A tap on the
-   status page asks again now; a tap on the readings does nothing. */
+   HA_INTERVAL_US, while a bird is up too; only the readings draw what comes
+   back. A tap on the status page asks again now. A tap on the readings shows
+   the latest bird, a tap on the photo its details, and a tap on those, or a
+   timeout, goes back to the readings. */
 static void dashboard_task(void *argument)
 {
     (void)argument;
@@ -288,13 +347,17 @@ static void dashboard_task(void *argument)
     cyd_update_screen_drawn();
     while (true) {
         update_status_screen();
+        bool timed = screen == SCREEN_PHOTO || screen == SCREEN_INFO || screen == SCREEN_MESSAGE;
+        if (timed && esp_timer_get_time() >= screen_until_us) {
+            enter_glance();
+        }
         if (ha_setup_problem == NULL && board_wifi_connected() &&
             esp_timer_get_time() >= next_fetch_us) {
             bool arrived = fetch_readings();
             next_fetch_us = esp_timer_get_time() + HA_INTERVAL_US;
             if (arrived && screen == SCREEN_STATUS) {
                 enter_glance();
-                /* A tap made on the status page doesn't count on the readings. */
+                /* A tap made on the status page doesn't ask for a bird. */
                 ulTaskNotifyValueClear(NULL, TAP_BIT);
             }
         }
@@ -308,6 +371,8 @@ static void dashboard_task(void *argument)
         int64_t wake_us = sooner(now + 1000 * 1000, next_fetch_us, now);
         if (screen == SCREEN_GLANCE) {
             wake_us = sooner(wake_us, glance_composed_us + GLANCE_REDRAW_US, now);
+        } else if (screen != SCREEN_STATUS) {
+            wake_us = sooner(wake_us, screen_until_us, now);
         }
         TickType_t wait_ticks = pdMS_TO_TICKS((uint32_t)((wake_us - now) / 1000));
         if (wait_ticks == 0) {
@@ -320,7 +385,8 @@ static void dashboard_task(void *argument)
         if ((events & WIFI_JOINED_BIT) && screen == SCREEN_STATUS) {
             next_fetch_us = 0;
         }
-        /* An update that drew nothing leaves the screen and any tap alone. */
+        /* An update that drew nothing leaves the screen, a bird photo
+           say, and any tap alone. */
         if ((events & UPDATE_BIT) && cyd_update_lend_screen()) {
             redraw_after_update();
             /* Taps made on the update's screen are dropped. */
@@ -328,8 +394,21 @@ static void dashboard_task(void *argument)
             events &= ~TAP_BIT;
         }
         if (events & TAP_BIT) {
-            if (screen == SCREEN_STATUS) {
+            switch (screen) {
+            case SCREEN_STATUS:
                 next_fetch_us = 0;
+                break;
+            case SCREEN_GLANCE:
+                show_bird_for_tap();
+                break;
+            case SCREEN_PHOTO:
+                wildlife_show_info();
+                enter_timed_screen(SCREEN_INFO, INFO_TIMEOUT_US);
+                break;
+            case SCREEN_INFO:
+            case SCREEN_MESSAGE:
+                enter_glance();
+                break;
             }
             /* Taps made while the screen was busy are dropped. */
             ulTaskNotifyValueClear(NULL, TAP_BIT);

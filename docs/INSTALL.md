@@ -101,6 +101,7 @@ The weather dashboard needs:
 
 - **Home Assistant address and token.** The same as the home dashboard's, with the same admin-token caution.
 - **Seven sensor IDs.** The outside temperature, its high and low over the past 24 hours, rain today and this week, and the shed battery's charge now and its forecast at dawn, all entity IDs such as `sensor.some_name`. They are under "Weather dashboard" on the setup page, and all seven are required. The [app's README](../apps/weather_dashboard/README.md) says how to make the high and low with Statistics helpers.
+- **Wildlife camera server**, optional. The same as the home dashboard's: tapping the readings shows its latest bird.
 
 ## 6. Build
 
