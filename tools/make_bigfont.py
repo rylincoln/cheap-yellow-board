@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""Rasterises DejaVu Sans Bold into the home dashboard's big fonts.
+"""Rasterises DejaVu Sans Bold into the big fonts of the home and weather dashboards.
 
 Run: uv run --no-project --with pillow==13.0.0 --with matplotlib==3.11.2 python tools/make_bigfont.py
-Writes apps/home_dashboard/main/bigfont_data.c and bigfont_data.h. The pinned
-versions keep the output byte for byte the same.
+Writes bigfont_data.c and bigfont_data.h in apps/home_dashboard/main and
+apps/weather_dashboard/main. The pinned versions keep the output byte for byte
+the same.
 """
+import math
 import os
 
 import matplotlib
 from matplotlib import font_manager
 from PIL import Image, ImageDraw, ImageFont
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps", "home_dashboard", "main")
+APPS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "apps")
 
-SIZES = {  # name: (480 board, 320 board), the em in pixels; None is fitted
-    "label": (20, 14),
-    "strip": (48, 28),
-    "tile": (72, 48),
-    "outside": (120, 80),
-    "outside_mid": (None, None),
-}
 # The outside tile's room for its number on each board, in pixels: the
 # tile's width less TILE_PAD in glance_layout.c (256 - 16, and 171 - 16).
 OUTSIDE_ROOM = (240, 155)
-# outside_mid is the largest em at which these fit OUTSIDE_ROOM, so an
-# outside reading this wide stays larger than the inside tiles.
-OUTSIDE_MID_TEXTS = ("-10°", "100°")
+# The weather Outside tile is 288 and 192 wide, less the same 16.
+WEATHER_ROOM = (272, 176)
+# A fitted font is the largest em below its bound's at which these fit the
+# room, so a reading this wide stays larger than the font named as its floor.
+FIT_TEXTS = ("-10°", "100°")
 LABEL_CHARS = " " + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghijklmnopqrstuvwxyz" + "0123456789" + "-%"
 NUM_CHARS = " 0123456789.-°A"
 # The battery strip's icons, drawn rather than taken from the font: the
@@ -33,7 +30,33 @@ NUM_CHARS = " 0123456789.-°A"
 # U+E000 + tenths (private use).
 BOLT = "\u26a1"
 BATTERY = 0xE000
-STRIP_CHARS = NUM_CHARS + "▼" + BOLT + "".join(chr(BATTERY + tenths) for tenths in range(11))
+SUNRISE = 0xE010
+BATTERIES = "".join(chr(BATTERY + tenths) for tenths in range(11))
+STRIP_CHARS = NUM_CHARS + "▼" + BOLT + BATTERIES
+DIGITS = " 0123456789"
+UPPER = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+# Per app: its output folder and its fonts as (name, (480 board, 320 board)
+# ems, characters, fit). fit is None or (room, bound, floor): the em is
+# fitted, and bound and floor name the fonts it must stay below and above.
+APPS_FONTS = (
+    (os.path.join(APPS, "home_dashboard", "main"), (
+        ("label", (20, 14), LABEL_CHARS, None),
+        ("strip", (48, 28), STRIP_CHARS, None),
+        ("tile", (72, 48), NUM_CHARS, None),
+        ("outside", (120, 80), NUM_CHARS, None),
+        ("outside_mid", (None, None), NUM_CHARS, (OUTSIDE_ROOM, "outside", "tile")),
+    )),
+    (os.path.join(APPS, "weather_dashboard", "main"), (
+        ("label", (20, 14), LABEL_CHARS, None),
+        ("small", (14, 10), UPPER, None),
+        ("hilo", (32, 21), DIGITS + "-°▲▼", None),
+        ("rain", (48, 28), DIGITS + ".-", None),
+        ("shed", (40, 24), DIGITS + "-→" + chr(SUNRISE) + BATTERIES, None),
+        ("temp", (120, 80), DIGITS + "-°", None),
+        ("temp_mid", (None, None), DIGITS + "-°", (WEATHER_ROOM, "temp", "hilo")),
+    )),
+)
 SS = 4  # supersampling for the icons
 
 
@@ -58,10 +81,10 @@ def text_width(font, text):
 
 
 def fit_em(path, room, largest):
-    """The largest em under largest at which every OUTSIDE_MID_TEXTS fits room."""
+    """The largest em under largest at which every FIT_TEXTS fits room."""
     for em in range(largest - 1, 0, -1):
         font = ImageFont.truetype(path, em)
-        if all(text_width(font, text) <= room for text in OUTSIDE_MID_TEXTS):
+        if all(text_width(font, text) <= room for text in FIT_TEXTS):
             return em
     raise ValueError("nothing fits %d pixels" % room)
 
@@ -83,6 +106,23 @@ def polygon(points, w, h):
     """Fills points, given as fractions of w and h."""
     big = Image.new("L", (w * SS, h * SS), 0)
     ImageDraw.Draw(big).polygon([(x * w * SS, y * h * SS) for x, y in points], fill=255)
+    return big.resize((w, h), Image.BOX)
+
+
+def sunrise(w, h):
+    """A half sun on a horizon bar, with rays above it."""
+    bar = max(2, round(h * 0.12))
+    cy = h - bar
+    r = min((cy) / 1.8, w / 2 / 1.75)
+    big = Image.new("L", (w * SS, h * SS), 0)
+    d = ImageDraw.Draw(big)
+    cx = w * SS / 2
+    d.rectangle([0, cy * SS, w * SS - 1, h * SS - 1], fill=255)
+    d.pieslice([cx - r * SS, (cy - r) * SS, cx + r * SS, (cy + r) * SS], 180, 360, fill=255)
+    for deg in (160, 125, 90, 55, 20):
+        c, s = math.cos(math.radians(deg)), -math.sin(math.radians(deg))
+        d.line([(cx + c * r * 1.3 * SS, (cy + s * r * 1.3) * SS),
+                (cx + c * r * 1.75 * SS, (cy + s * r * 1.75) * SS)], fill=255, width=max(2, round(bar * 0.8)) * SS)
     return big.resize((w, h), Image.BOX)
 
 
@@ -118,12 +158,18 @@ def build(path, em, chars):
     pad = em
     for ch in sorted(chars, key=ord):
         code = ord(ch)
-        if ch in "▼" + BOLT or BATTERY <= code <= BATTERY + 10:
+        if ch in "▲▼" + BOLT or BATTERY <= code <= BATTERY + 10 or code == SUNRISE:
             # Icons stand on the baseline as tall as a digit.
             h = zero[3] - zero[1]
             if ch == "▼":
                 w = round(0.9 * zero_adv)
                 img = polygon([(0, 0), (1, 0), (0.5, 1)], w, h)
+            elif ch == "▲":
+                w = round(0.9 * zero_adv)
+                img = polygon([(0, 1), (1, 1), (0.5, 0)], w, h)
+            elif code == SUNRISE:
+                w = round(1.8 * h)
+                img = sunrise(w, h)
             elif ch == BOLT:
                 w = round(0.75 * h)
                 img = polygon([(0.42, 0), (1, 0), (0.7, 0.38), (1, 0.38), (0.22, 1),
@@ -178,15 +224,21 @@ def main():
     h_header = header + """ * The fonts' licence is in bigfont_data.c.
  */
 """
+    for out, fonts in APPS_FONTS:
+        write_app(path, out, fonts, c_header, h_header)
+
+
+def write_app(path, out, fonts, c_header, h_header):
+    sizes = {name: ems for name, ems, _, _ in fonts}
     c = [c_header, '#include "bigfont_data.h"\n']
     h = [h_header, "#ifndef BIGFONT_DATA_H\n#define BIGFONT_DATA_H\n", '#include "bigfont.h"\n']
-    for name, sizes in SIZES.items():
-        chars = LABEL_CHARS if name == "label" else STRIP_CHARS if name == "strip" else NUM_CHARS
+    for name, ems, chars, fit in fonts:
         for board, suffix in enumerate(("480", "320")):
-            em = sizes[board]
-            if em is None:
-                em = fit_em(path, OUTSIDE_ROOM[board], SIZES["outside"][board])
-                assert em > SIZES["tile"][board]
+            em = ems[board]
+            if fit:
+                room, bound, floor = fit
+                em = fit_em(path, room[board], sizes[bound][board])
+                assert em > sizes[floor][board]
             ident = "%s_%s" % (name, suffix)
             ascent, line_height, glyphs, bitmap = build(path, em, chars)
             c.append("static const uint8_t %s_bitmap[%d] = {\n%s\n};\n" % (ident, len(bitmap), c_bytes(bitmap)))
@@ -196,12 +248,13 @@ def main():
                      % (ident, line_height, ascent, len(glyphs), ident, ident))
             h.append("extern const bigfont_t bigfont_%s;" % ident)
             total = len(bitmap) + len(glyphs) * 12
-            print("%-16s em %3d: %d glyphs, %d bitmap bytes, ~%d bytes with glyph table"
-                  % (ident, em, len(glyphs), len(bitmap), total))
+            print("%-16s em %3d line %3d: %d glyphs, %d bitmap bytes, ~%d bytes with glyph table"
+                  % (ident, em, line_height, len(glyphs), len(bitmap), total))
     h.append("\n#endif\n")
-    with open(os.path.join(OUT, "bigfont_data.c"), "w", newline="\n") as f:
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, "bigfont_data.c"), "w", newline="\n") as f:
         f.write("\n".join(c))
-    with open(os.path.join(OUT, "bigfont_data.h"), "w", newline="\n") as f:
+    with open(os.path.join(out, "bigfont_data.h"), "w", newline="\n") as f:
         f.write("\n".join(h))
 
 
