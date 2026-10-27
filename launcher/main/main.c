@@ -293,8 +293,6 @@ static bool store_or_erase(nvs_handle_t nvs, const char *key, const char *value)
    setting, is erased. Runs on the web server's task. */
 static bool save_phone_settings(const phone_settings_t *settings)
 {
-    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     char saved_ssid[33];
     char saved_password[65];
     char saved_ha_url[128];
@@ -317,7 +315,7 @@ static bool save_phone_settings(const phone_settings_t *settings)
         stored = store_or_erase(nvs, "ha_token", settings->ha_token);
     }
     for (int i = 0; stored && i < PHONE_HA_SENSOR_COUNT; ++i) {
-        stored = store_or_erase(nvs, SENSOR_KEYS[i], settings->ha_sensors[i]);
+        stored = store_or_erase(nvs, PHONE_HA_SENSOR_KEYS[i], settings->ha_sensors[i]);
     }
     if (stored && settings->update_key[0] != '\0') {
         stored = store_or_erase(nvs, CYD_CONFIG_UPDATE_KEY, settings->update_key);
@@ -1891,8 +1889,6 @@ static void draw_phone_qr(void)
    true when one was saved; the network task is then joining it. */
 static bool phone_setup_screen(const network_list_t *list)
 {
-    static const char *const SENSOR_KEYS[PHONE_HA_SENSOR_COUNT] = {
-        "ha_upstairs", "ha_downstairs", "ha_outside", "ha_battery", "ha_battery_pct"};
     static phone_settings_t saved; /* the page keeps its own copy */
     char ssid[33];
     char update_key[40]; /* only whether one is set matters; never shown */
@@ -1904,7 +1900,7 @@ static bool phone_setup_screen(const network_list_t *list)
     load_config_string("ha_url", "", saved.ha_url, sizeof(saved.ha_url));
     load_config_string("ha_token", "", saved.ha_token, sizeof(saved.ha_token));
     for (int i = 0; i < PHONE_HA_SENSOR_COUNT; ++i) {
-        load_config_string(SENSOR_KEYS[i], "", saved.ha_sensors[i], sizeof(saved.ha_sensors[i]));
+        load_config_string(PHONE_HA_SENSOR_KEYS[i], "", saved.ha_sensors[i], sizeof(saved.ha_sensors[i]));
     }
     const phone_setup_config_t config = {
         .networks = list->networks,

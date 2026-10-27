@@ -80,6 +80,10 @@ The layout:
 | `launcher/` | Launcher (factory app), custom second-stage bootloader, partition table | Yes, as `firmware.bin` on the release tagged `launcher` |
 | `tools/` | `cyd_push.py`, which `pio run -t upload` uses to push a build over the network | No |
 | `apps/home_dashboard/` | Home Assistant readings, with the latest bird on a tap | Yes |
+| `apps/weather_dashboard/` | Outside temperature, rain and a shed battery from Home Assistant, with the latest bird on a tap | Yes |
+| `components/ha_glance/`, `components/wildlife/` | Home Assistant readings and tiles, the status page and Wi-Fi join, and birds on tap, shared by both dashboards | Built into each dashboard |
+| `components/cyd_update/` | Pushes from the Mac and update checks against GitHub releases | Built into every app |
+| `components/json_scan/` | A small JSON reader for the release list and the wildlife camera's reply | Built in where needed |
 | `components/cyd_display/` | Shared display and touch driver, with board detection | Built into every project |
 | `docs/` | This guide | No |
 
@@ -96,6 +100,12 @@ The home dashboard needs:
 - **Home Assistant address and token.** For example `http://homeassistant.local:8123`. Create the token at the bottom of your Home Assistant user's profile page, under Security, as a long-lived access token. The token must belong to an admin user: the dashboard reads through `POST /api/template`, which is admin-only, and a non-admin token shows `HA 401 bad token`. That makes it a full admin credential, sent in cleartext unless the address is `https`, so consider a dedicated admin user for the board. Home Assistant 2024.3 or newer is needed.
 - **Sensor IDs.** The entity IDs for upstairs, downstairs, outside and the battery current, such as `sensor.some_name`, and optionally the battery's charge in percent.
 - **Wildlife camera server.** The address of your wildlife-cam gallery, for example `http://192.168.1.50:8080`. Tapping the readings shows its latest bird.
+
+The weather dashboard needs:
+
+- **Home Assistant address and token.** The same as the home dashboard's, with the same admin-token caution.
+- **Seven sensor IDs.** The outside temperature, its high and low over the past 24 hours, rain today and this week, and the shed battery's charge now and its forecast at dawn, all entity IDs such as `sensor.some_name`. They are under "Weather dashboard" on the setup page, and all seven are required. The [app's README](../apps/weather_dashboard/README.md) says how to make the high and low with Statistics helpers.
+- **Wildlife camera server**, optional. The same as the home dashboard's: tapping the readings shows its latest bird.
 
 ## 6. Build
 
@@ -203,6 +213,10 @@ To put a locally built app into a slot without GitHub or the network, write its 
 & $py $esptool --chip esp32 -p COM11 -b 230400 write_flash 0x150000 path\to\firmware.bin
 ```
 
+
+### A second board
+
+Flash the launcher over USB as above and let it join your Wi-Fi network. Settings are per board, so a second board needs its own. Once it has joined, the launcher's bottom row shows its IP address (it takes turns with other messages every 2.5 seconds; tap it to skip ahead). Tap `PHONE SETUP`, then open `http://` and that address from a laptop on the same network and fill in the Home Assistant and sensor settings. If the laptop can't reach the board that way, join the `CYD-Setup-XXXX` network instead and browse to `192.168.4.1`. Save, then install the app from the launcher's list, or push it from its folder with the second board's address: `CYD_HOST=cyd-xxxx.local pio run -t upload` (the board announces `cyd-xxxx.local`, xxxx the last four hex digits of its MAC address). A board installs whatever app is pushed to it, and `tools/cyd_push.py` otherwise sends to the host in `CYD_HOST` or `~/.config/cyd/host`, so name the board on every push when you have two.
 
 ### Updates from GitHub
 
