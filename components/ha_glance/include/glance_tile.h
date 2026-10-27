@@ -7,6 +7,10 @@
 
 #include "bigfont.h"
 
+/* The grid the layouts are drawn on; glance_scale_rect scales from it. */
+#define DESIGN_W 480
+#define DESIGN_H 320
+
 typedef struct { int16_t x, y, w, h; } rect_t;
 
 typedef struct {

@@ -20,8 +20,9 @@ void board_status_set_wifi(const char *format, ...) __attribute__((format(printf
 void board_status_set_ha(const char *format, ...) __attribute__((format(printf, 1, 2)));
 /* True when a status changed since the last draw. */
 bool board_status_changed(void);
-/* Draws the ten rows: title, the start reason, the Wi-Fi network ssid and
-   state, the address in ha_url and the last request, hint, free memory. */
+/* Draws the ten rows: title, the start reason, the crash record, the Wi-Fi
+   network ssid and state, the address in ha_url and the last request, hint,
+   free memory and "tap to retry". */
 void board_status_draw(const char *title, const char *ssid, const char *ha_url,
                        const char *hint);
 

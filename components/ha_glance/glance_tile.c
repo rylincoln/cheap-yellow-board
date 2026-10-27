@@ -2,10 +2,6 @@
 
 #include <stdio.h>
 
-/* The layouts are drawn on this grid and scaled to other panels. */
-#define DESIGN_W 480
-#define DESIGN_H 320
-
 uint16_t glance_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
     return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));

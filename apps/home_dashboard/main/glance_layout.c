@@ -5,10 +5,6 @@
 
 #include "bigfont_data.h"
 
-/* The layout is drawn on this grid and scaled to other panels. */
-#define DESIGN_W 480
-#define DESIGN_H 320
-
 #define TILE_PAD 16 /* a number must be this much narrower than its tile */
 
 static const rect_t design_rects[GLANCE_TILE_COUNT] = {

@@ -19,7 +19,11 @@
 #define SSID_MAX 32
 #define PASSWORD_MAX 64
 #define URL_MAX 127   /* home_dashboard keeps each address in 128 bytes */
-#define FORM_MAX 5632 /* every field, percent-encoded */
+/* Worst case 5,566 bytes: every field at its maximum length, percent-encoded
+   (3 bytes each): ssid 32, pass 64, two URLs 127, token 255, update key 39 and
+   twelve sensor IDs 95 = 1,784 characters, 5,352 encoded; plus 179 bytes of
+   key names, 18 "=" and 17 "&". */
+#define FORM_MAX 5632
 #define TOKEN_MAX 255
 #define DNS_PORT 53
 #define DNS_PACKET_MAX 512

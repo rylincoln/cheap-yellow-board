@@ -2,7 +2,7 @@
 
 PlatformIO/ESP-IDF application for the 320x240 or 480x320 display and resistive touchscreen on the ESP32 Cheap Yellow Display (CYD), following the [board documentation](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display).
 
-It is the only app in this repository so far. The [root README](../../README.md) describes the launcher that runs it.
+It is one of the apps in this repository, beside [weather_dashboard](../weather_dashboard/README.md). The [root README](../../README.md) describes the launcher that runs them.
 
 ## What it does
 
