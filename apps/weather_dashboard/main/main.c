@@ -21,7 +21,8 @@
 
 #define LCD_WIDTH CYD_LCD_WIDTH
 #define LCD_HEIGHT CYD_LCD_HEIGHT
-/* Home Assistant is asked this often, a bird on the screen or not. */
+/* Home Assistant is asked this often while the status page or the readings
+   are up. */
 #define HA_INTERVAL_US (30LL * 1000 * 1000)
 /* The readings re-compose their tiles this often, so a reading turns gray
    on time without a fetch. */
@@ -334,10 +335,10 @@ static void redraw_after_update(void)
 }
 
 /* Runs the screens. Home Assistant is asked on joining Wi-Fi and every
-   HA_INTERVAL_US, while a bird is up too; only the readings draw what comes
-   back. A tap on the status page asks again now. A tap on the readings shows
-   the latest bird, a tap on the photo its details, and a tap on those, or a
-   timeout, goes back to the readings. */
+   HA_INTERVAL_US while the status page or the readings are up. A tap on the
+   status page asks again now. A tap on the readings shows the latest bird, a
+   tap on the photo its details, and a tap on those, or a timeout, goes back
+   to the readings. */
 static void dashboard_task(void *argument)
 {
     (void)argument;
@@ -351,8 +352,8 @@ static void dashboard_task(void *argument)
         if (timed && esp_timer_get_time() >= screen_until_us) {
             enter_glance();
         }
-        if (ha_setup_problem == NULL && board_wifi_connected() &&
-            esp_timer_get_time() >= next_fetch_us) {
+        if ((screen == SCREEN_STATUS || screen == SCREEN_GLANCE) && ha_setup_problem == NULL &&
+            board_wifi_connected() && esp_timer_get_time() >= next_fetch_us) {
             bool arrived = fetch_readings();
             next_fetch_us = esp_timer_get_time() + HA_INTERVAL_US;
             if (arrived && screen == SCREEN_STATUS) {
@@ -368,7 +369,10 @@ static void dashboard_task(void *argument)
 
         /* Wake at the screen's next deadline, and at least once a second. */
         int64_t now = esp_timer_get_time();
-        int64_t wake_us = sooner(now + 1000 * 1000, next_fetch_us, now);
+        int64_t wake_us = now + 1000 * 1000;
+        if (screen == SCREEN_STATUS || screen == SCREEN_GLANCE) {
+            wake_us = sooner(wake_us, next_fetch_us, now);
+        }
         if (screen == SCREEN_GLANCE) {
             wake_us = sooner(wake_us, glance_composed_us + GLANCE_REDRAW_US, now);
         } else if (screen != SCREEN_STATUS) {

@@ -240,7 +240,7 @@ static void send_form(httpd_req_t *request, const char *error,
         "onclick=\"this.form.pass.type=this.checked?'text':'password'\">Show password</label>"
         "<small>Leave it blank for an open network. For the network already saved, "
         "blank keeps its password.</small>"
-        "<label>Wildlife camera server <small>for birds on the dashboard</small></label>"
+        "<label>Wildlife camera server <small>for birds on the dashboards</small></label>"
         "<input name=\"wildlife_url\" maxlength=\"127\" inputmode=\"url\" "
         "autocapitalize=\"none\" autocorrect=\"off\" spellcheck=\"false\" "
         "placeholder=\"http://192.168.1.50:8080\" value=\"");

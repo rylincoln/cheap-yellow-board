@@ -16,7 +16,7 @@ Until the first good reply, a status page shows the Wi-Fi network and the Home A
 
 ### Birds on tap
 
-Tap the readings to see the latest bird from your wildlife camera gallery, as on the home dashboard. The newest bird's species photo fills the screen, with its aspect kept. Tap again for its details: name, time, confidence and `also heard` with the next birds. Tap once more to return to the readings. Without a tap, the photo or details return to the readings after 30 seconds. The readings keep refreshing meanwhile, and come back up to date.
+Tap the readings to see the latest bird from your wildlife camera gallery, as on the home dashboard. The newest bird's species photo fills the screen, with its aspect kept. Tap again for its details: name, time, confidence and `also heard` with the next birds. Tap once more to return to the readings. Without a tap, the photo or details return to the readings after 30 seconds. Home Assistant isn't asked while a bird is up; a request that came due meanwhile goes out as soon as the readings return.
 
 The messages are `NO WI-FI`, `NO WILDLIFE CAM / use phone setup`, `NO BIRDS YET` and `WILDLIFE ERROR / <reason>`.
 
