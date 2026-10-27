@@ -40,7 +40,7 @@ The screen refreshes every 30 seconds, as the home dashboard does, and redraws o
 
 ### Touch
 
-Nothing happens on a tap *(designer's call, shown to the user without objection)*. There are no birds and no other screens.
+A tap on the readings shows the latest bird from the wildlife camera, exactly as on the home dashboard: the bird's photo, a tap for its details, a tap back to the readings, and back by itself after 30 seconds **(user, after seeing the board)**. It uses the same `wildlife_url` setting and the same messages. A tap on the status page retries the Home Assistant fetch. There are no other screens.
 
 ## Where the data comes from
 
@@ -70,7 +70,7 @@ Settings stay in NVS namespace `cyd_config`, written by the launcher's phone pag
 
 ## Non-goals
 
-- Indoor readings, the shop battery, birds or any tap action.
+- Indoor readings or the shop battery.
 - Forecasts beyond the dawn battery charge, wind, humidity, pressure, or anything else from the weather station.
 - Reaching Home Assistant from outside the home network.
 - Unit conversion on the board.
