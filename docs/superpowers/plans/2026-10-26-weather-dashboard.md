@@ -244,7 +244,7 @@
   - With the user's go-ahead, it goes on the Mac's USB; run serial commands with the sandbox disabled.
   - `erase_flash`, then write the launcher with the esptool command in `CLAUDE.md`.
   - Join Wi-Fi from the launcher's network chooser or phone setup.
-  - Push the weather dashboard from `apps/weather_dashboard`. The first push gives a keyless board the Mac's key.
+  - Push the weather dashboard from `apps/weather_dashboard` with `CYD_HOST` set to the second board (`CYD_HOST=cyd-xxxx.local pio run -t upload`); otherwise the push goes to the board in the host file. The first push gives a keyless board the Mac's key.
 - [ ] **Step 4: Settings.** While phone setup runs, the user opens the board's LAN address on the laptop and pastes:
   - the HA address and token;
   - the seven IDs, which go only into the page, never into a file.

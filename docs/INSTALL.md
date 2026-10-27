@@ -211,7 +211,7 @@ To put a locally built app into a slot without GitHub or the network, write its 
 
 ### A second board
 
-Flash the launcher over USB as above and let it join your Wi-Fi network. Settings are per board, so a second board needs its own. Once it has joined, the launcher's bottom row shows its IP address (it takes turns with other messages every 2.5 seconds; tap it to skip ahead). Tap `PHONE SETUP`, then open `http://` and that address from a laptop on the same network and fill in the Home Assistant and sensor settings. If the laptop can't reach the board that way, join the `CYD-Setup-XXXX` network instead and browse to `192.168.4.1`. Save, then install the app from the launcher's list, or push it with `pio run -t upload` from its folder.
+Flash the launcher over USB as above and let it join your Wi-Fi network. Settings are per board, so a second board needs its own. Once it has joined, the launcher's bottom row shows its IP address (it takes turns with other messages every 2.5 seconds; tap it to skip ahead). Tap `PHONE SETUP`, then open `http://` and that address from a laptop on the same network and fill in the Home Assistant and sensor settings. If the laptop can't reach the board that way, join the `CYD-Setup-XXXX` network instead and browse to `192.168.4.1`. Save, then install the app from the launcher's list, or push it from its folder with the second board's address: `CYD_HOST=cyd-xxxx.local pio run -t upload` (the board announces `cyd-xxxx.local`, xxxx the last four hex digits of its MAC address). A board installs whatever app is pushed to it, and `tools/cyd_push.py` otherwise sends to the host in `CYD_HOST` or `~/.config/cyd/host`, so name the board on every push when you have two.
 
 ### Updates from GitHub
 
