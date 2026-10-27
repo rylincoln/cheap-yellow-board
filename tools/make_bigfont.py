@@ -52,7 +52,7 @@ APPS_FONTS = (
         ("small", (14, 10), UPPER, None),
         ("hilo", (32, 21), DIGITS + "-°▲▼", None),
         ("rain", (48, 28), DIGITS + ".-", None),
-        ("shed", (40, 24), DIGITS + "-→" + chr(SUNRISE) + BATTERIES, None),
+        ("shed", (32, 20), DIGITS + "-→" + chr(SUNRISE) + BATTERIES, None),
         ("temp", (120, 80), DIGITS + "-°", None),
         ("temp_mid", (None, None), DIGITS + "-°", (WEATHER_ROOM, "temp", "hilo")),
     )),

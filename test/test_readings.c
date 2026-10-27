@@ -30,6 +30,14 @@ static void pct(double v, bool avail, const char *want, int percent)
     CHECK_STR(buf, want);
 }
 
+static void rain(double v, bool avail, const char *want, int result)
+{
+    reading_t r = {avail, v, NOW};
+    char buf[16];
+    CHECK(format_rain(&r, buf, sizeof(buf)) == result);
+    CHECK_STR(buf, want);
+}
+
 int main(void)
 {
     /* The battery's charge is optional; an empty ID is left out. */
@@ -100,5 +108,23 @@ int main(void)
     pct(50, false, "--", -1);
     pct(1e30, true, "--", -1);
     pct(NAN, true, "--", -1);
+
+    rain(0, true, "0.00", 0);
+    rain(0.004, true, "0.00", 0);
+    rain(-0.004, true, "0.00", 0); /* never "-0.00" */
+    rain(-0.005, true, "0.00", 0);
+    rain(-0.006, true, "--", -1);
+    rain(0.12, true, "0.12", 1);
+    rain(1.48, true, "1.48", 1);
+    rain(9.994, true, "9.99", 1);
+    rain(9.996, true, "10.0", 1);
+    rain(12.34, true, "12.3", 1);
+    rain(99.94, true, "99.9", 1);
+    rain(99.96, true, "--", -1);
+    rain(-0.01, true, "--", -1);
+    rain(NAN, true, "--", -1);
+    rain(INFINITY, true, "--", -1);
+    rain(1e30, true, "--", -1);
+    rain(1, false, "--", -1);
     CHECK_DONE();
 }

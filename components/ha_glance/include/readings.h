@@ -31,5 +31,9 @@ battery_direction_t format_battery(const reading_t *reading, char *out, size_t s
 /* "82", without the sign, and returns that percent; "--" and -1 when
    unavailable or outside -0.5 to 100.5. */
 int format_percent(const reading_t *reading, char *out, size_t size);
+/* Inches of rain in four characters: "0.12", "9.99", "10.0", "99.9". Returns 1
+   for rain, 0 for a dry "0.00" (never "-0.00"), and -1 with "--" when
+   unavailable or outside -0.005 to 99.95. */
+int format_rain(const reading_t *reading, char *out, size_t size);
 
 #endif

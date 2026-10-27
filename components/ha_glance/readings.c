@@ -157,3 +157,30 @@ int format_percent(const reading_t *reading, char *out, size_t size)
     snprintf(out, size, "%d", percent);
     return percent;
 }
+
+int format_rain(const reading_t *reading, char *out, size_t size)
+{
+    double v = reading->value;
+    /* The negated tests also turn away NaN. */
+    if (!reading->available || !(v >= -0.005 && v < 99.95)) {
+        snprintf(out, size, "--");
+        return -1;
+    }
+    if (v < 0.005) {
+        snprintf(out, size, "0.00");
+        return 0;
+    }
+    /* Decide on the rounded value, so 9.996 is "10.0" and 99.96 is "--". */
+    long hundredths = lround(v * 100);
+    if (hundredths < 1000) {
+        snprintf(out, size, "%ld.%02ld", hundredths / 100, hundredths % 100);
+        return 1;
+    }
+    long tenths = lround(v * 10);
+    if (tenths >= 1000) {
+        snprintf(out, size, "--");
+        return -1;
+    }
+    snprintf(out, size, "%ld.%ld", tenths / 10, tenths % 10);
+    return 1;
+}
