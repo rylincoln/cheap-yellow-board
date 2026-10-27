@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Layout
 
-PlatformIO projects in ESP-IDF C for the ESP32 Cheap Yellow Display. `launcher/` holds the factory app, a custom second-stage bootloader (`bootloader_components/`) and `partitions.csv`. Each folder under `apps/` is one boot image. The dashboards share `components/ha_glance` (Home Assistant readings and tiles) and `components/wildlife` (birds on tap). Every project pulls in the one shared `components/cyd_display` through `EXTRA_COMPONENT_DIRS` in its top-level `CMakeLists.txt`.
+PlatformIO projects in ESP-IDF C for the ESP32 Cheap Yellow Display. `launcher/` holds the factory app, a custom second-stage bootloader (`bootloader_components/`) and `partitions.csv`. Each folder under `apps/` is one boot image. The dashboards share `components/ha_glance` (Home Assistant readings and tiles, the status page and the Wi-Fi join) and `components/wildlife` (birds on tap). Every project pulls in the one shared `components/cyd_display` through `EXTRA_COMPONENT_DIRS` in its top-level `CMakeLists.txt`.
 
 An app's CMake `project()` name must equal its folder name. CI tags each app's release with the folder name, and the launcher treats a slot whose project name differs from the tag it was downloaded as as flashed over USB, so it offers the same build again forever.
 

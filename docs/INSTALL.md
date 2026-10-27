@@ -81,7 +81,9 @@ The layout:
 | `tools/` | `cyd_push.py`, which `pio run -t upload` uses to push a build over the network | No |
 | `apps/home_dashboard/` | Home Assistant readings, with the latest bird on a tap | Yes |
 | `apps/weather_dashboard/` | Outside temperature, rain and a shed battery from Home Assistant, with the latest bird on a tap | Yes |
-| `components/ha_glance/`, `components/wildlife/` | Home Assistant readings and tiles, and birds on tap, shared by both dashboards | Built into each dashboard |
+| `components/ha_glance/`, `components/wildlife/` | Home Assistant readings and tiles, the status page and Wi-Fi join, and birds on tap, shared by both dashboards | Built into each dashboard |
+| `components/cyd_update/` | Pushes from the Mac and update checks against GitHub releases | Built into every app |
+| `components/json_scan/` | A small JSON reader for the release list and the wildlife camera's reply | Built in where needed |
 | `components/cyd_display/` | Shared display and touch driver, with board detection | Built into every project |
 | `docs/` | This guide | No |
 
