@@ -9,11 +9,11 @@
    digits and shows as "--". */
 #define DISPLAY_LIMIT 999.5
 
-int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out, size_t size)
+int readings_template_body(const char *const entity_ids[], int count, char *out, size_t size)
 {
     int n = snprintf(out, size, "{\"template\":\"{%% for s in expand([");
     bool first = true;
-    for (int i = 0; i < SENSOR_COUNT && n >= 0 && (size_t)n < size; i++) {
+    for (int i = 0; i < count && n >= 0 && (size_t)n < size; i++) {
         if (entity_ids[i][0] != '\0') {
             n += snprintf(out + n, size - n, "%s'%s'", first ? "" : ",", entity_ids[i]);
             first = false;
@@ -29,8 +29,8 @@ int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out
 }
 
 /* Parses one line (no newline, no CR) into reading_t if it is good. */
-static void apply_line(const char *line, size_t len, const char *const ids[SENSOR_COUNT],
-                       int64_t now_us, reading_t readings[SENSOR_COUNT], bool seen[SENSOR_COUNT])
+static void apply_line(const char *line, size_t len, const char *const ids[], int count,
+                       int64_t now_us, reading_t readings[])
 {
     const char *first = memchr(line, ' ', len);
     if (!first) {
@@ -69,22 +69,20 @@ static void apply_line(const char *line, size_t len, const char *const ids[SENSO
     if (*end != '\0' || !isfinite(value)) {
         return;
     }
-    for (int i = 0; i < SENSOR_COUNT; i++) {
-        if (!seen[i] && id_len > 0 && strlen(ids[i]) == id_len && memcmp(ids[i], line, id_len) == 0) {
+    for (int i = 0; i < count; i++) {
+        if (!readings[i].available && id_len > 0 && strlen(ids[i]) == id_len && memcmp(ids[i], line, id_len) == 0) {
             readings[i].available = true;
             readings[i].value = value;
             readings[i].reported_at_us = now_us - age * 1000000LL;
-            seen[i] = true;
             return;
         }
     }
 }
 
-int readings_apply(const char *reply, const char *const entity_ids[SENSOR_COUNT],
-                   int64_t now_us, reading_t readings[SENSOR_COUNT])
+int readings_apply(const char *reply, const char *const entity_ids[], int count,
+                   int64_t now_us, reading_t readings[])
 {
-    bool seen[SENSOR_COUNT] = {false};
-    for (int i = 0; i < SENSOR_COUNT; i++) {
+    for (int i = 0; i < count; i++) {
         readings[i].available = false;
     }
     const char *p = reply;
@@ -95,14 +93,14 @@ int readings_apply(const char *reply, const char *const entity_ids[SENSOR_COUNT]
         if (content > 0 && p[content - 1] == '\r') {
             content--;
         }
-        apply_line(p, content, entity_ids, now_us, readings, seen);
+        apply_line(p, content, entity_ids, count, now_us, readings);
         p += len + (nl ? 1 : 0);
     }
-    int count = 0;
-    for (int i = 0; i < SENSOR_COUNT; i++) {
-        count += readings[i].available;
+    int found = 0;
+    for (int i = 0; i < count; i++) {
+        found += readings[i].available;
     }
-    return count;
+    return found;
 }
 
 bool reading_stale(const reading_t *reading, int64_t now_us)

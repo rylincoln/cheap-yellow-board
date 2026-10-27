@@ -6,7 +6,8 @@
 
 #include "cyd_display.h"
 #include "cyd_update.h"
-#include "glance.h"
+#include "glance_draw.h"
+#include "glance_layout.h"
 #include "ha_client.h"
 #include "readings.h"
 #include "wildlife.h"
@@ -867,7 +868,7 @@ static bool fetch_readings(void)
         update_status_screen();
         return false;
     }
-    int found = readings_apply(ha_reply, entity_ids, esp_timer_get_time(), readings);
+    int found = readings_apply(ha_reply, entity_ids, SENSOR_COUNT, esp_timer_get_time(), readings);
     int asked = 0;
     for (int sensor = 0; sensor < SENSOR_COUNT; ++sensor) {
         asked += ha_entity_ids[sensor][0] != '\0';
@@ -890,7 +891,7 @@ static void draw_glance(bool full)
     int64_t now = esp_timer_get_time();
     bool show_charge = ha_entity_ids[SENSOR_BATTERY_PCT][0] != '\0';
     glance_compose(LCD_WIDTH, LCD_HEIGHT, readings, show_charge, now, tiles);
-    glance_draw(tiles, full);
+    glance_draw(tiles, GLANCE_TILE_COUNT, full);
     glance_composed_us = now;
 }
 
@@ -1062,7 +1063,7 @@ static const char *prepare_ha_request(void)
             return "no sensor IDs";
         }
     }
-    if (readings_template_body(entity_ids, ha_body, sizeof(ha_body)) < 0) {
+    if (readings_template_body(entity_ids, SENSOR_COUNT, ha_body, sizeof(ha_body)) < 0) {
         return "sensor IDs too long";
     }
     return NULL;

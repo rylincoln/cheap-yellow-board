@@ -20,28 +20,6 @@ static const rect_t design_rects[GLANCE_TILE_COUNT] = {
 
 static const char *const labels[SENSOR_BATTERY] = {"UPSTAIRS", "DOWNSTAIRS", "OUTSIDE"};
 
-uint16_t glance_rgb(uint8_t r, uint8_t g, uint8_t b)
-{
-    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
-}
-
-/* value * num / den, rounded to the nearest integer (value, num >= 0). */
-static int scale(int value, int num, int den)
-{
-    return (int)(((long)value * num * 2 + den) / (den * 2));
-}
-
-static void add_text(glance_tile_t *tile, const bigfont_t *font, const char *text, int x,
-                     int line_y, uint16_t color)
-{
-    glance_text_t *t = &tile->texts[tile->count++];
-    t->font = font;
-    snprintf(t->text, sizeof t->text, "%s", text);
-    t->x = (int16_t)x;
-    t->line_y = (int16_t)line_y;
-    t->color = color;
-}
-
 /* A label and a number. The number takes the largest font that fits:
    Outside steps down outside, outside_mid, tile, strip, and the inside
    tiles start at tile. */
@@ -60,7 +38,7 @@ static void temperature_tile(glance_tile_t *tile, sensor_t sensor, bool small_pa
     char number[16];
 
     format_temperature(reading, number, sizeof number);
-    add_text(tile, label_font, labels[sensor], r->x + (r->w - bigfont_text_width(label_font, labels[sensor])) / 2,
+    glance_add_text(tile, label_font, labels[sensor], r->x + (r->w - bigfont_text_width(label_font, labels[sensor])) / 2,
              r->y + (small_panel ? 4 : 6), glance_rgb(0x9A, 0x9A, 0x9A));
 
     int pick = sensor == SENSOR_OUTSIDE ? 0 : 2;
@@ -76,7 +54,7 @@ static void temperature_tile(glance_tile_t *tile, sensor_t sensor, bool small_pa
 
     uint16_t color = sensor == SENSOR_OUTSIDE ? glance_rgb(0x7F, 0xD4, 0xFF) : glance_rgb(0xFF, 0xD3, 0x8A);
     if (!reading->available || reading_stale(reading, now_us)) color = gray;
-    add_text(tile, font, number, r->x + (r->w - bigfont_text_width(font, number)) / 2, line_y, color);
+    glance_add_text(tile, font, number, r->x + (r->w - bigfont_text_width(font, number)) / 2, line_y, color);
 }
 
 /* One line: the current, after a bolt when charging or an arrow when
@@ -126,7 +104,7 @@ static void battery_tile(glance_tile_t *tile, bool small_panel, const reading_t 
     int x = r->x + (r->w - total) / 2;
     for (int i = 0; i < count; i++) {
         if (i) x += gaps[i - 1];
-        add_text(tile, fonts[i], strings[i], x, baseline - fonts[i]->ascent, colors[i]);
+        glance_add_text(tile, fonts[i], strings[i], x, baseline - fonts[i]->ascent, colors[i]);
         x += bigfont_text_width(fonts[i], strings[i]);
     }
 }
@@ -139,10 +117,7 @@ void glance_compose(int width, int height, const reading_t readings[SENSOR_COUNT
     for (int s = 0; s < GLANCE_TILE_COUNT; s++) {
         const rect_t *d = &design_rects[s];
         glance_tile_t *tile = &tiles[s];
-        tile->rect.x = (int16_t)scale(d->x, width, DESIGN_W);
-        tile->rect.y = (int16_t)scale(d->y, height, DESIGN_H);
-        tile->rect.w = (int16_t)scale(d->w, width, DESIGN_W);
-        tile->rect.h = (int16_t)scale(d->h, height, DESIGN_H);
+        tile->rect = glance_scale_rect(*d, width, height);
         tile->background = glance_rgb(0x14, 0x14, 0x14);
         if (s == SENSOR_BATTERY) battery_tile(tile, small_panel, &readings[s], &readings[SENSOR_BATTERY_PCT], show_charge, now_us);
         else temperature_tile(tile, (sensor_t)s, small_panel, &readings[s], now_us);

@@ -1,4 +1,4 @@
-#include "glance.h"
+#include "glance_draw.h"
 
 #include <string.h>
 
@@ -11,7 +11,7 @@ static const char *TAG = "glance";
 
 static uint16_t strip[CYD_LCD_MAX_WIDTH * STRIP_ROWS];
 /* The tiles on screen, byte for byte; zeroed when a draw fails. */
-static glance_tile_t drawn[GLANCE_TILE_COUNT];
+static glance_tile_t drawn[GLANCE_MAX_TILES];
 
 /* Draws one tile a strip at a time: each strip starts as the tile's
    background, then every text crossing it is blended in. */
@@ -45,15 +45,18 @@ static esp_err_t draw_tile(const glance_tile_t *tile)
     return ESP_OK;
 }
 
-void glance_draw(const glance_tile_t tiles[GLANCE_TILE_COUNT], bool full)
+void glance_draw(const glance_tile_t *tiles, int count, bool full)
 {
+    if (count > GLANCE_MAX_TILES) {
+        count = GLANCE_MAX_TILES;
+    }
     if (full) {
         esp_err_t result = cyd_fill_rect(0, 0, cyd_lcd_width(), cyd_lcd_height(), CYD_COLOR_BLACK);
         if (result != ESP_OK) {
             ESP_LOGE(TAG, "Could not clear the screen: %s", esp_err_to_name(result));
         }
     }
-    for (int index = 0; index < GLANCE_TILE_COUNT; ++index) {
+    for (int index = 0; index < count; ++index) {
         if (!full && memcmp(&drawn[index], &tiles[index], sizeof(drawn[index])) == 0) {
             continue;
         }

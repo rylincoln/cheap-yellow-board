@@ -6,10 +6,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* SENSOR_BATTERY is the battery's current; SENSOR_BATTERY_PCT, its charge, is optional. */
-typedef enum {
-    SENSOR_UPSTAIRS, SENSOR_DOWNSTAIRS, SENSOR_OUTSIDE, SENSOR_BATTERY, SENSOR_BATTERY_PCT, SENSOR_COUNT
-} sensor_t;
 #define READING_STALE_US (300LL * 1000 * 1000)
 
 typedef struct {
@@ -20,13 +16,13 @@ typedef struct {
 
 typedef enum { BATTERY_IDLE, BATTERY_CHARGING, BATTERY_DRAINING, BATTERY_UNKNOWN } battery_direction_t;
 
-/* The JSON body for POST /api/template, leaving out empty entity IDs;
-   length, or -1 if size is too small. */
-int readings_template_body(const char *const entity_ids[SENSOR_COUNT], char *out, size_t size);
-/* Sets every reading from one reply; returns how many are available. A
-   sensor with an empty entity ID stays unavailable. */
-int readings_apply(const char *reply, const char *const entity_ids[SENSOR_COUNT],
-                   int64_t now_us, reading_t readings[SENSOR_COUNT]);
+/* The JSON body for POST /api/template asking for count entities, leaving
+   out empty entity IDs; length, or -1 if size is too small. */
+int readings_template_body(const char *const entity_ids[], int count, char *out, size_t size);
+/* Sets every reading from one reply; returns how many are available. An
+   entity with an empty ID stays unavailable. */
+int readings_apply(const char *reply, const char *const entity_ids[], int count,
+                   int64_t now_us, reading_t readings[]);
 bool reading_stale(const reading_t *reading, int64_t now_us);
 /* "66°" (UTF-8 degree sign), or "--" when unavailable or 999.5 or more either way. */
 void format_temperature(const reading_t *reading, char *out, size_t size);
