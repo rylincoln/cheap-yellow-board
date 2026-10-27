@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "board_status.h"
+#include "board_wifi.h"
 #include "cyd_display.h"
 #include "cyd_update.h"
 #include "glance_draw.h"
@@ -11,15 +13,11 @@
 #include "ha_client.h"
 #include "readings.h"
 #include "wildlife.h"
-#include "esp_attr.h"
 #include "esp_crt_bundle.h"
-#include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 #include "esp_heap_caps.h"
 #include "rom/tjpgd.h"
 #include "freertos/FreeRTOS.h"
@@ -65,7 +63,6 @@ static char wifi_password[65];
 /* The wildlife camera gallery's address, without a trailing slash; empty
    until phone setup stores one. */
 static char wildlife_url[128];
-static volatile bool wifi_connected;
 static TaskHandle_t app_task_handle;
 
 /* Home Assistant settings, the request built from them once, its reply,
@@ -142,106 +139,20 @@ typedef struct {
    Wi-Fi network and its state, the Home Assistant address and the last
    request. */
 
-/* Static buffers, so sized for the widest board; drawing cuts to the panel. */
-#define STATUS_SIZE (CYD_TEXT_MAX_COLUMNS + 1)
-#define STATUS_MAGIC 0xB1DD5747u
-
-/* What the viewer was doing, kept across crash and watchdog resets. */
-typedef struct {
-    uint32_t magic;
-    uint32_t crashes; /* in a row */
-    char stage[STATUS_SIZE];
-} crash_record_t;
-
-static RTC_NOINIT_ATTR crash_record_t crash_record;
-static char start_status[STATUS_SIZE];
-static char crash_status[STATUS_SIZE];
-static portMUX_TYPE status_lock = portMUX_INITIALIZER_UNLOCKED;
-static char wifi_status[STATUS_SIZE] = "starting";
-static char ha_status[STATUS_SIZE] = "waiting for Wi-Fi";
 /* The last wildlife camera request's result, for the WILDLIFE ERROR message. */
-static char server_status[STATUS_SIZE];
-static volatile uint32_t status_changes;
-static uint32_t shown_status_changes;
+static char server_status[BOARD_STATUS_SIZE];
+static portMUX_TYPE server_status_lock = portMUX_INITIALIZER_UNLOCKED;
 /* False until the status screen is first drawn. Nothing else is drawn
    while it is the screen, and it never comes back once left. */
 static bool status_on_screen;
 
-static void set_stage(const char *stage)
+static void set_server_status_text(const char *format, va_list arguments)
 {
-    crash_record.magic = STATUS_MAGIC;
-    snprintf(crash_record.stage, sizeof(crash_record.stage), "%s", stage);
-}
-
-/* Records why this start happened, and what a crashed run was doing. */
-static void note_start(void)
-{
-    esp_reset_reason_t reason = esp_reset_reason();
-    const char *crash = NULL;
-    switch (reason) {
-    case ESP_RST_PANIC:
-        crash = "CRASHED";
-        break;
-    case ESP_RST_INT_WDT:
-    case ESP_RST_TASK_WDT:
-    case ESP_RST_WDT:
-        crash = "WATCHDOG";
-        break;
-    case ESP_RST_BROWNOUT:
-        crash = "BROWNOUT";
-        break;
-    default:
-        break;
-    }
-    bool have_record = crash_record.magic == STATUS_MAGIC;
-    if (crash == NULL) {
-        snprintf(start_status, sizeof(start_status), "%s",
-                 reason == ESP_RST_SW ? "started" : "powered on");
-        crash_record.crashes = 0;
-    } else {
-        crash_record.crashes = have_record ? crash_record.crashes + 1 : 1;
-        if (crash_record.crashes > 1) {
-            snprintf(start_status, sizeof(start_status), "%.8s x%u", crash,
-                     (unsigned)(crash_record.crashes % 100));
-        } else {
-            snprintf(start_status, sizeof(start_status), "%s", crash);
-        }
-        if (have_record) {
-            crash_record.stage[sizeof(crash_record.stage) - 1] = '\0';
-            snprintf(crash_status, sizeof(crash_status), "in %.14s", crash_record.stage);
-        }
-        ESP_LOGW(TAG, "Restarted after a %s (reason %d) while %s", crash, (int)reason,
-                 have_record ? crash_record.stage : "unknown");
-    }
-    set_stage("starting");
-}
-
-static void set_status(char *field, const char *format, va_list arguments)
-{
-    char text[STATUS_SIZE];
+    char text[BOARD_STATUS_SIZE];
     vsnprintf(text, sizeof(text), format, arguments);
-    portENTER_CRITICAL(&status_lock);
-    memcpy(field, text, sizeof(text));
-    ++status_changes;
-    portEXIT_CRITICAL(&status_lock);
-}
-
-static void set_wifi_status(const char *format, ...) __attribute__((format(printf, 1, 2)));
-static void set_wifi_status(const char *format, ...)
-{
-    va_list arguments;
-    va_start(arguments, format);
-    set_status(wifi_status, format, arguments);
-    va_end(arguments);
-}
-
-static void set_ha_status(const char *format, ...) __attribute__((format(printf, 1, 2)));
-static void set_ha_status(const char *format, ...)
-{
-    va_list arguments;
-    va_start(arguments, format);
-    set_status(ha_status, format, arguments);
-    va_end(arguments);
+    portENTER_CRITICAL(&server_status_lock);
+    memcpy(server_status, text, sizeof(text));
+    portEXIT_CRITICAL(&server_status_lock);
 }
 
 static void set_server_status(const char *format, ...) __attribute__((format(printf, 1, 2)));
@@ -249,59 +160,16 @@ static void set_server_status(const char *format, ...)
 {
     va_list arguments;
     va_start(arguments, format);
-    set_status(server_status, format, arguments);
+    set_server_status_text(format, arguments);
     va_end(arguments);
 }
 
 static void draw_status(void)
 {
-    char wifi[STATUS_SIZE];
-    char home_assistant[STATUS_SIZE];
-    portENTER_CRITICAL(&status_lock);
-    memcpy(wifi, wifi_status, sizeof(wifi));
-    memcpy(home_assistant, ha_status, sizeof(home_assistant));
-    shown_status_changes = status_changes;
-    portEXIT_CRITICAL(&status_lock);
-
-    char network[STATUS_SIZE + 16];
-    snprintf(network, sizeof(network), "Wi-Fi %.11s", wifi_ssid);
-    /* "HA homeassistant.local:8123": the address without its scheme or
-       path, cut to the row. */
-    const char *host = ha_url;
-    if (strncmp(host, "http://", 7) == 0) {
-        host += 7;
-    } else if (strncmp(host, "https://", 8) == 0) {
-        host += 8;
-    }
-    int host_length = (int)strcspn(host, "/");
-    int host_room = CYD_TEXT_COLUMNS - 3; /* after "HA " */
-    char address[STATUS_SIZE];
-    snprintf(address, sizeof(address), "HA %.*s",
-             host_length < host_room ? host_length : host_room, host);
     const char *hint = ha_setup_problem != NULL ? "use phone setup"
-                       : wifi_connected         ? ""
+                       : board_wifi_connected() ? ""
                                                 : "EN opens launcher";
-    char memory[32];
-    snprintf(memory, sizeof(memory), "RAM %uK free", (unsigned)(esp_get_free_heap_size() / 1024));
-    bool crashed = crash_record.crashes > 0;
-    const struct {
-        uint16_t color;
-        const char *text;
-    } rows[CYD_TEXT_ROWS] = {
-        {CYD_COLOR_YELLOW, "HOME DASHBOARD"},
-        {crashed ? CYD_COLOR_RED : CYD_COLOR_GRAY, start_status},
-        {CYD_COLOR_RED, crash_status},
-        {CYD_COLOR_CYAN, network},
-        {CYD_COLOR_WHITE, wifi},
-        {CYD_COLOR_CYAN, address},
-        {CYD_COLOR_WHITE, home_assistant},
-        {CYD_COLOR_GRAY, hint},
-        {CYD_COLOR_GRAY, memory},
-        {CYD_COLOR_GRAY, "tap to retry"},
-    };
-    for (int row = 0; row < CYD_TEXT_ROWS; ++row) {
-        ESP_ERROR_CHECK(cyd_text_row(row, rows[row].color, CYD_COLOR_BLACK, rows[row].text));
-    }
+    board_status_draw("HOME DASHBOARD", wifi_ssid, ha_url, hint);
     status_on_screen = true;
 }
 
@@ -322,7 +190,7 @@ static screen_t screen = SCREEN_STATUS;
 static void update_status_screen(void)
 {
     if (screen == SCREEN_STATUS &&
-        (!status_on_screen || status_changes != shown_status_changes)) {
+        (!status_on_screen || board_status_changed())) {
         draw_status();
     }
 }
@@ -330,7 +198,7 @@ static void update_status_screen(void)
 /* Says what the viewer is doing, on screen and in the crash record. */
 static void show_progress(const char *stage)
 {
-    set_stage(stage);
+    board_status_set_stage(stage);
     set_server_status("%s", stage);
     update_status_screen();
 }
@@ -741,7 +609,7 @@ static bool show_bird_photo(const wildlife_bird_t *bird)
                  esp_err_to_name(result));
         return false;
     }
-    set_stage("drawing photo");
+    board_status_set_stage("drawing photo");
     result = draw_jpeg(image_client, jpeg_length);
     esp_http_client_close(image_client);
     esp_http_client_cleanup(image_client);
@@ -759,15 +627,15 @@ static bird_result_t show_latest_bird(void)
 {
     show_progress("getting birds");
     if (!fetch_birds()) {
-        set_stage("idle");
+        board_status_set_stage("idle");
         return BIRD_FAILED;
     }
     if (bird_count == 0) {
-        set_stage("idle");
+        board_status_set_stage("idle");
         return BIRD_NONE;
     }
     bool shown = show_bird_photo(&birds[0]);
-    set_stage("idle");
+    board_status_set_stage("idle");
     return shown ? BIRD_SHOWN : BIRD_NO_PHOTO;
 }
 
@@ -802,7 +670,7 @@ static void show_bird_info(void)
     char name[2][sizeof(latest->label)];
     char confidence[sizeof(latest->confidence) + 16];
     char heard[ALSO_HEARD_ROWS][CYD_TEXT_MAX_COLUMNS + 1];
-    set_stage("showing info");
+    board_status_set_stage("showing info");
     wrap_name(latest->label, name[0], name[1], sizeof(name[0]));
     if (latest->confidence[0] != '\0') {
         snprintf(confidence, sizeof(confidence), "confidence %s", latest->confidence);
@@ -834,7 +702,7 @@ static void show_bird_info(void)
     for (int row = 0; row < CYD_TEXT_ROWS; ++row) {
         ESP_ERROR_CHECK(cyd_text_row(row, rows[row].color, CYD_COLOR_BLACK, rows[row].text));
     }
-    set_stage("idle");
+    board_status_set_stage("idle");
 }
 
 /* ---- Home Assistant and the glance screen ---- */
@@ -850,20 +718,20 @@ static int64_t glance_composed_us;
 static bool fetch_readings(void)
 {
     int http_status = 0;
-    set_stage("asking HA");
-    set_ha_status("asking HA");
+    board_status_set_stage("asking HA");
+    board_status_set_ha("asking HA");
     update_status_screen();
     esp_err_t result = ha_fetch(ha_url, ha_token, ha_body, ha_reply, sizeof(ha_reply),
                                 &http_status);
-    set_stage("idle");
+    board_status_set_stage("idle");
     if (result != ESP_OK) {
         if (http_status == 401) {
-            set_ha_status("HA 401 bad token");
+            board_status_set_ha("HA 401 bad token");
         } else if (http_status != 0 && http_status != 200) {
-            set_ha_status("HA HTTP %d", http_status);
+            board_status_set_ha("HA HTTP %d", http_status);
         } else {
             const char *name = esp_err_to_name(result);
-            set_ha_status("HA %s", strncmp(name, "ESP_ERR_", 8) == 0 ? name + 8 : name);
+            board_status_set_ha("HA %s", strncmp(name, "ESP_ERR_", 8) == 0 ? name + 8 : name);
         }
         update_status_screen();
         return false;
@@ -875,11 +743,11 @@ static bool fetch_readings(void)
     }
     ESP_LOGI(TAG, "Home Assistant has %d of %d sensors", found, asked);
     if (found == 0) {
-        set_ha_status("no sensors found");
+        board_status_set_ha("no sensors found");
         update_status_screen();
         return false;
     }
-    set_ha_status("HA OK");
+    board_status_set_ha("HA OK");
     return true;
 }
 
@@ -936,7 +804,7 @@ static void show_bird_for_tap(void)
        only once the bird is found. */
     cyd_update_set_interruptible(false);
     draw_lines(CYD_COLOR_WHITE, "finding the", "latest bird");
-    if (!wifi_connected) {
+    if (!board_wifi_connected()) {
         show_message("NO WI-FI", "");
         return;
     }
@@ -944,7 +812,7 @@ static void show_bird_for_tap(void)
         show_message("NO WILDLIFE CAM", "use phone setup");
         return;
     }
-    char reason[STATUS_SIZE];
+    char reason[BOARD_STATUS_SIZE];
     switch (show_latest_bird()) {
     case BIRD_SHOWN:
         enter_timed_screen(SCREEN_PHOTO, PHOTO_TIMEOUT_US);
@@ -957,9 +825,9 @@ static void show_bird_for_tap(void)
         show_message("NO BIRDS YET", "");
         break;
     case BIRD_FAILED:
-        portENTER_CRITICAL(&status_lock);
+        portENTER_CRITICAL(&server_status_lock);
         memcpy(reason, server_status, sizeof(reason));
-        portEXIT_CRITICAL(&status_lock);
+        portEXIT_CRITICAL(&server_status_lock);
         show_message("WILDLIFE ERROR", reason);
         break;
     }
@@ -976,64 +844,6 @@ static void touch_task(void *argument)
             if (app_task_handle != NULL) {
                 xTaskNotify(app_task_handle, TAP_BIT, eSetBits);
             }
-        }
-    }
-}
-
-/* Why a join failed, in a few words. */
-static const char *wifi_failure_text(uint8_t reason, char *text, size_t size)
-{
-    switch (reason) {
-    case WIFI_REASON_NO_AP_FOUND:
-        return "no AP found";
-    case WIFI_REASON_AUTH_EXPIRE:
-    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
-    case WIFI_REASON_AUTH_FAIL:
-    case WIFI_REASON_HANDSHAKE_TIMEOUT:
-    case WIFI_REASON_MIC_FAILURE:
-        return "bad password?";
-    case WIFI_REASON_BEACON_TIMEOUT:
-        return "signal lost";
-    default:
-        snprintf(text, size, "error %u", (unsigned)reason);
-        return text;
-    }
-}
-
-static void wifi_event_handler(void *argument, esp_event_base_t event_base,
-                               int32_t event_id, void *event_data)
-{
-    (void)argument;
-    static unsigned attempts;
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        set_wifi_status("joining");
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        const wifi_event_sta_disconnected_t *disconnected = event_data;
-        char text[16];
-        if (wifi_connected && ha_setup_problem == NULL) {
-            set_ha_status("waiting for Wi-Fi");
-        }
-        wifi_connected = false;
-        ++attempts;
-        set_wifi_status("#%u %s", attempts,
-                        wifi_failure_text(disconnected->reason, text, sizeof(text)));
-        ESP_LOGW(TAG, "Wi-Fi disconnected (reason %u); retrying",
-                 (unsigned)disconnected->reason);
-        /* Retrying never gives up, so a failed attempt must not abort. */
-        esp_err_t result = esp_wifi_connect();
-        if (result != ESP_OK) {
-            ESP_LOGE(TAG, "Wi-Fi reconnect failed: %s", esp_err_to_name(result));
-        }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = event_data;
-        wifi_connected = true;
-        attempts = 0;
-        set_wifi_status(IPSTR, IP2STR(&event->ip_info.ip));
-        ESP_LOGI(TAG, "Wi-Fi connected; IP address: " IPSTR, IP2STR(&event->ip_info.ip));
-        cyd_update_network_up();
-        if (app_task_handle != NULL) {
-            xTaskNotify(app_task_handle, WIFI_JOINED_BIT, eSetBits);
         }
     }
 }
@@ -1108,39 +918,10 @@ static bool load_config(void)
     ESP_LOGI(TAG, "Wildlife camera: %s", wildlife_url[0] != '\0' ? wildlife_url : "not set");
     ha_setup_problem = prepare_ha_request();
     if (ha_setup_problem != NULL) {
-        set_ha_status("%s", ha_setup_problem);
+        board_status_set_ha("%s", ha_setup_problem);
         ESP_LOGW(TAG, "Home Assistant is not set up (%s); use phone setup", ha_setup_problem);
     }
     return have_wifi;
-}
-
-static void wifi_init(void)
-{
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    ESP_ERROR_CHECK(esp_netif_create_default_wifi_sta() != NULL ? ESP_OK : ESP_FAIL);
-
-    wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&init_config));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                               wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                               wifi_event_handler, NULL));
-
-    /* An open network has no password and would fail a WPA2 threshold. */
-    wifi_config_t wifi_config = {
-        .sta = {
-            .threshold.authmode = wifi_password[0] != '\0' ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
-        },
-    };
-    memcpy(wifi_config.sta.ssid, wifi_ssid, strnlen(wifi_ssid, sizeof(wifi_config.sta.ssid)));
-    memcpy(wifi_config.sta.password, wifi_password,
-           strnlen(wifi_password, sizeof(wifi_config.sta.password) - 1));
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-
-    ESP_ERROR_CHECK(esp_wifi_start());
 }
 
 /* The earlier of wake_us and deadline_us, counting only a deadline still
@@ -1185,7 +966,7 @@ static void dashboard_task(void *argument)
             enter_glance();
         }
         if ((screen == SCREEN_STATUS || screen == SCREEN_GLANCE) && ha_setup_problem == NULL &&
-            wifi_connected && esp_timer_get_time() >= next_fetch_us) {
+            board_wifi_connected() && esp_timer_get_time() >= next_fetch_us) {
             bool arrived = fetch_readings();
             next_fetch_us = esp_timer_get_time() + HA_INTERVAL_US;
             if (arrived && screen == SCREEN_STATUS) {
@@ -1255,7 +1036,7 @@ static void dashboard_task(void *argument)
 void app_main(void)
 {
     ESP_ERROR_CHECK(cyd_display_init());
-    note_start();
+    board_status_note_start();
     if (!load_config()) {
         ESP_LOGE(TAG, "No Wi-Fi settings in NVS; the launcher's Wi-Fi setup stores them");
         ESP_ERROR_CHECK(cyd_text_row(3, CYD_COLOR_YELLOW, CYD_COLOR_BLACK, "NO WI-FI SETTINGS"));
@@ -1278,5 +1059,6 @@ void app_main(void)
         .screen_bit = UPDATE_BIT,
     };
     ESP_ERROR_CHECK(cyd_update_init(&update_config));
-    wifi_init();
+    board_wifi_start(wifi_ssid, wifi_password, ha_setup_problem == NULL, app_task_handle,
+                     WIFI_JOINED_BIT);
 }
