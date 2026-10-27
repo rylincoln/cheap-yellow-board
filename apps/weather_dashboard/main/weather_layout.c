@@ -1,6 +1,5 @@
 #include "weather_layout.h"
 
-#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -86,15 +85,15 @@ static void outside_tile(glance_tile_t *tile, const fonts_t *f, bool small_panel
     if (line_y + font->line_height > space_bottom) line_y = space_bottom - font->line_height;
     if (line_y < space_top) line_y = space_top;
     uint16_t color = BLUE;
-    if (!readings[WX_TEMP].available || reading_stale(&readings[WX_TEMP], now_us)) color = GRAY;
+    if (strcmp(number, "--") == 0 || reading_stale(&readings[WX_TEMP], now_us)) color = GRAY;
     glance_add_text(tile, font, number, centred_x(r, font, number), line_y, color);
 
     format_temperature(&readings[WX_HIGH], high, sizeof high);
     format_temperature(&readings[WX_LOW], low, sizeof low);
     snprintf(high_text, sizeof high_text, "\xE2\x96\xB2%s", high);
     snprintf(low_text, sizeof low_text, "\xE2\x96\xBC%s", low);
-    uint16_t high_color = readings[WX_HIGH].available ? AMBER : GRAY;
-    uint16_t low_color = readings[WX_LOW].available ? BLUE : GRAY;
+    uint16_t high_color = strcmp(high, "--") == 0 ? GRAY : AMBER;
+    uint16_t low_color = strcmp(low, "--") == 0 ? GRAY : BLUE;
     add_pair(tile, f->hilo, high_text, high_color, f->hilo, low_text, low_color, gap, hilo_y, hilo_y + f->hilo->line_height);
 
     glance_add_text(tile, f->small, "PAST 24 HOURS", centred_x(r, f->small, "PAST 24 HOURS"), small_y, UNIT_GRAY);
@@ -127,7 +126,7 @@ static void shed_tile(glance_tile_t *tile, const fonts_t *f, bool small_panel, c
                       int64_t now_us)
 {
     const rect_t *r = &tile->rect;
-    const int gap = small_panel ? 4 : 6; /* the widest strip leaves 24 px for six gaps */
+    const int gap = small_panel ? 4 : 6; /* six gaps; the widest strip still keeps 8 px at each side */
     char digits[8], icon[4], level[16], dawn[16];
 
     /* The battery icon filled to the nearest tenth is U+E000 + tenths. */
@@ -139,7 +138,7 @@ static void shed_tile(glance_tile_t *tile, const fonts_t *f, bool small_panel, c
 
     /* A forecast below zero means the battery runs out: read 0. */
     reading_t forecast = readings[WX_SHED_DAWN];
-    if (forecast.available && forecast.value < -0.5 && forecast.value > -1e9) forecast.value = 0;
+    if (forecast.available && forecast.value < -0.5) forecast.value = 0;
     int dawn_percent = format_percent(&forecast, digits, sizeof digits);
     uint16_t dawn_color = charge_text(dawn, sizeof dawn, "\xEE\x80\x90", dawn_percent, digits, AMBER, false);
 
