@@ -211,7 +211,7 @@ To put a locally built app into a slot without GitHub or the network, write its 
 
 ### A second board
 
-Flash the launcher over USB as above, then let it join your Wi-Fi network. Settings are per board, so a second board needs its own: tap `PHONE SETUP` in the launcher, join the `CYD-Setup-XXXX` network from a laptop instead of a phone, and open the address the board shows. Fill in the Home Assistant and sensor settings, and save. Then install the app from the launcher's list, or push it with `pio run -t upload` from its folder.
+Flash the launcher over USB as above and let it join your Wi-Fi network. Settings are per board, so a second board needs its own. Once it has joined, the launcher's bottom row shows its IP address (it takes turns with other messages every 2.5 seconds; tap it to skip ahead). Tap `PHONE SETUP`, then open `http://` and that address from a laptop on the same network and fill in the Home Assistant and sensor settings. If the laptop can't reach the board that way, join the `CYD-Setup-XXXX` network instead and browse to `192.168.4.1`. Save, then install the app from the launcher's list, or push it with `pio run -t upload` from its folder.
 
 ### Updates from GitHub
 
